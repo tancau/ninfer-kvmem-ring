@@ -1,0 +1,1 @@
+{"max_tokens": 400, "messages": [{"content": "Implement quicksort in Python with type hints and a short docstring, then show example usage.", "role": "user"}], "model": "bonsai-2-27b", "temperature": 0.0}

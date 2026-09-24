@@ -1,0 +1,1 @@
+{"max_tokens": 60, "messages": [{"content": "Reply with the single word: OK", "role": "user"}], "model": "bonsai-2-27b", "reasoning_effort": "high", "temperature": 0.5}

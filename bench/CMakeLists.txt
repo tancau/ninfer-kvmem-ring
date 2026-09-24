@@ -1,0 +1,5 @@
+include(cmake/NinferBenchmarks.cmake)
+include(ops/benchmarks.cmake)
+include(inference/benchmarks.cmake)
+include(context_cost/benchmarks.cmake)
+include(models/qwen3_5/benchmarks.cmake)
