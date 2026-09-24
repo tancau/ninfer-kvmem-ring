@@ -448,3 +448,57 @@ LCBv6 90.07 ≈ 90.05）——ZCode 场景押对了；③ reasoning effort 必�
 速度不对标（3060 vs 3090/5090 + ring mask + host 溢出，必然更慢）。
 参考：官方称三值版在 5090 上 143 t/s；本机 ring 短问答实测 decode ≈43 t/s。
 
+## 十、L3 本机实测：HumanEval+（RTX 3060 ring）
+
+**结果：152 / 164 = 92.68%**（pass@1；温度 1.0 单样本、xhigh 思考、预算 49,152，
+与白皮书附录 B 同协议）。同一测试集（EvalPlus 扩展，164 题）对照：
+
+| 模型 | HumanEval+ | 来源 |
+|---|---:|---|
+| Qwen3.6-27B FP16 | 95.73 | 白皮书 Table 10 |
+| 三值 Bonsai 2 27B（官方，H100） | **95.12** | 白皮书 Table 10 |
+| Qwen3.8-27B FP16 | 93.29 | 白皮书 Table 10 |
+| **本机 ring（RTX 3060 12G）** | **92.68** | 本节 |
+| Qwen3.8-27B IQ2_XXS | 87.95 | 白皮书 Table 10 |
+
+**差值 4 题（−2.44 分）**。n=164 时 95% 置信区间约 ±3.98 分（SE=2.03%），
+官方 95.12 落在本机区间内 → **统计上不可区分**；点估计略低，归因见下。
+
+失败明细（12 题，**全部为真实代码缺陷**，无环境假阴性、无超时）：
+
+| 类型 | 题数 | 例 |
+|---|---:|---|
+| AssertionError（边界条件不满足） | 9 | HumanEval/103、116、124、132、141、145、151、91、99 |
+| NameError | 1 | HumanEval/154 `name 'i' is not defined` |
+| IndexError | 1 | HumanEval/160 `pop from empty list` |
+| TypeError | 1 | HumanEval/32 `Value after * must be an iterable, not float` |
+
+同一次运行的性能（引擎自报）：
+
+| 指标 | 值 |
+|---|---:|
+| 平均延迟 | 46.5 s/题 |
+| 平均输出 | 2,745 token（含 reasoning） |
+| 平均输入 | 220 token |
+| 吞吐 | 59.05 t/s |
+| 收尾方式 | 全部 `stop token` 自然收尾，无 output-limit 截断 |
+
+**口径与偏差**：
+
+1. 本机 EvalScope 1.10.0，协议同白皮书（temp 1.0 / top-p 0.95 / top-k 20 / 单样本 / xhigh）。
+2. **沙箱差异**：官方用 Docker `python3.11-numpy`；本机无 Docker，改为等价子进程执行
+   （同样的 `prompt + completion + test + check(entry_point)` 拼接），Python 3.12 + numpy 1.26。
+3. 单样本 temp 1.0 的方差：官方自身两次修订间也有 ±1% 抖动（1,179 题中 27 项翻转）。
+4. 未复现的偏差源：nvfp4 KV（+0.17% PPL）、int8 lm-head、MTP 投机（验证式，理论不改分布）；
+   ring 在这些短上下文（<1K token）**完全不激活**。
+5. 因此本机这一分应主要反映**三值基座本身**，而非 ring 移植引入的退化。
+
+**⚠️ 避坑（踩过的坑，供复现者参考）**：EvalScope 的 `humaneval_plus` 适配器走
+`CodeExecutionSandboxMixin`；sandbox 未启用时 `execute_code_in_sandbox` 返回
+`{'error': 'Sandbox is not initialized.'}` 且**不抛异常**，适配器取不到 `status`
+→ **每题判 False，总分 0**。两种解法：启用 Docker 沙箱，或像本机一样用等价子进程执行重打分
+（预测已落盘，不需要重跑 GPU）。
+
+复现：`eval/configs/bonsai2_27b_ring.yaml`（suite `humaneval_plus`）；
+本次运行目录 `eval/runs/20260924T202723Z-89f9e0aa`。
+

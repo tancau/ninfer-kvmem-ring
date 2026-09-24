@@ -1,0 +1,129 @@
+schema_version: 1
+
+# Needle-in-a-Haystack for the local ring setup (NInfer, RTX 3060 12G, 262144 ctx, 96K pool).
+# Mirrors the repository's qwen3_6_35b_needle_haystack.yaml but points at the local
+# bonsai2-27b engine and the Windows asset paths.
+#
+# Run:
+#   $env:PYTHONPATH='C:\ninfer-submit\ninfer-ring\eval'
+#   eval\.venv\Scripts\python.exe -m ninfer_eval run --config eval\configs\bonsai2_27b_ring_niah.yaml --suite <name>
+
+targets:
+  bonsai_api:
+    protocol: openai_chat
+    base_url: http://127.0.0.1:8081/v1
+    model: bonsai2-27b
+    max_concurrency: 1
+    request:
+      timeout_seconds: 86400
+      retries: 2
+      retry_interval_seconds: 10
+
+suites:
+  smoke:
+    jobs:
+      - id: niah_smoke_8k
+        backend: evalscope
+        dataset: needle_haystack
+        target: bonsai_api
+        max_concurrency: 1
+        limit: 1
+        generation: &retrieval_generation
+          temperature: 0
+          max_tokens: 512
+          seed: 42
+          extra_body:
+            enable_thinking: false
+        backend_args:
+          subset_list: [english]
+          judge_strategy: rule
+          dataset_args:
+            local_path: C:/Users/Administrator/.cache/modelscope/datasets/AI-ModelScope--Needle-in-a-Haystack-Corpus/snapshots/master
+            extra_params:
+              context_lengths_min: 8192
+              context_lengths_max: 8192
+              context_lengths_num_intervals: 1
+              document_depth_percent_min: 50
+              document_depth_percent_max: 50
+              document_depth_percent_intervals: 1
+              tokenizer_path: C:/Users/Administrator/.cache/modelscope/models/Qwen--Qwen3.8-27B/snapshots/master
+              show_score: true
+
+  niah_64k:
+    jobs:
+      - id: niah_64k
+        backend: evalscope
+        dataset: needle_haystack
+        target: bonsai_api
+        max_concurrency: 1
+        generation: *retrieval_generation
+        backend_args:
+          subset_list: [english, chinese]
+          judge_strategy: rule
+          dataset_args:
+            local_path: C:/Users/Administrator/.cache/modelscope/datasets/AI-ModelScope--Needle-in-a-Haystack-Corpus/snapshots/master
+            extra_params:
+              context_lengths_min: 65536
+              context_lengths_max: 65536
+              context_lengths_num_intervals: 1
+              document_depth_percent_min: 0
+              document_depth_percent_max: 100
+              document_depth_percent_intervals: 11
+              tokenizer_path: C:/Users/Administrator/.cache/modelscope/models/Qwen--Qwen3.8-27B/snapshots/master
+              show_score: true
+
+  niah_128k:
+    jobs:
+      - id: niah_128k
+        backend: evalscope
+        dataset: needle_haystack
+        target: bonsai_api
+        max_concurrency: 1
+        generation: *retrieval_generation
+        backend_args:
+          subset_list: [english, chinese]
+          judge_strategy: rule
+          dataset_args:
+            local_path: C:/Users/Administrator/.cache/modelscope/datasets/AI-ModelScope--Needle-in-a-Haystack-Corpus/snapshots/master
+            extra_params:
+              context_lengths_min: 131072
+              context_lengths_max: 131072
+              context_lengths_num_intervals: 1
+              document_depth_percent_min: 0
+              document_depth_percent_max: 100
+              document_depth_percent_intervals: 11
+              tokenizer_path: C:/Users/Administrator/.cache/modelscope/models/Qwen--Qwen3.8-27B/snapshots/master
+              show_score: true
+
+  niah_200k:
+    jobs:
+      - id: niah_200k
+        backend: evalscope
+        dataset: needle_haystack
+        target: bonsai_api
+        max_concurrency: 1
+        generation: *retrieval_generation
+        backend_args:
+          subset_list: [english, chinese]
+          judge_strategy: rule
+          dataset_args:
+            local_path: C:/Users/Administrator/.cache/modelscope/datasets/AI-ModelScope--Needle-in-a-Haystack-Corpus/snapshots/master
+            extra_params:
+              context_lengths_min: 200000
+              context_lengths_max: 200000
+              context_lengths_num_intervals: 1
+              document_depth_percent_min: 0
+              document_depth_percent_max: 100
+              document_depth_percent_intervals: 11
+              tokenizer_path: C:/Users/Administrator/.cache/modelscope/models/Qwen--Qwen3.8-27B/snapshots/master
+              show_score: true
+
+runtime:
+  max_parallel_jobs: 1
+  runs_dir: eval/runs
+  progress:
+    enabled: true
+    refresh_seconds: 1
+    heartbeat_seconds: 30
+  samples:
+    retention: all

@@ -1,0 +1,60 @@
+schema_version: 1
+
+# Local ring setup: NInfer engine, RTX 3060 12G, 262144 ctx, 96K device pool.
+# Run:
+#   $env:PYTHONPATH='C:\ninfer-submit\ninfer-ring\eval'
+#   eval\.venv\Scripts\python.exe -m ninfer_eval run --config eval\configs\bonsai2_27b_ring.yaml --suite <name>
+#
+# Protocol follows the PrismML whitepaper Appendix B so scores are comparable with the
+# published Ternary Bonsai 2 27B numbers (Table 10):
+#   thinking mode, reasoning effort xhigh (engine template default), temperature 1.0,
+#   top_p 0.95, top_k 20, single-sample pass@1, generous output budget.
+# HumanEval+ budget is 49,152 output tokens, matching the whitepaper.
+
+targets:
+  bonsai_api:
+    protocol: openai_chat
+    base_url: http://127.0.0.1:8081/v1
+    model: bonsai2-27b
+    max_concurrency: 1
+    request:
+      timeout_seconds: 86400
+      retries: 2
+      retry_interval_seconds: 10
+
+suites:
+  smoke:
+    jobs:
+      - id: humaneval_plus_smoke
+        backend: evalscope
+        dataset: humaneval_plus
+        target: bonsai_api
+        limit: 2
+        generation: &xhigh_generation
+          temperature: 1.0
+          top_p: 0.95
+          top_k: 20
+          max_tokens: 49152
+          seed: 42
+        backend_args:
+          judge_strategy: rule
+
+  humaneval_plus:
+    jobs:
+      - id: humaneval_plus
+        backend: evalscope
+        dataset: humaneval_plus
+        target: bonsai_api
+        generation: *xhigh_generation
+        backend_args:
+          judge_strategy: rule
+
+runtime:
+  max_parallel_jobs: 1
+  runs_dir: eval/runs
+  progress:
+    enabled: true
+    refresh_seconds: 1
+    heartbeat_seconds: 30
+  samples:
+    retention: all
