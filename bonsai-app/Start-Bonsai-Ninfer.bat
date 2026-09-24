@@ -26,6 +26,7 @@ REM  a left-red/right-blue test image was described correctly in 2.3 s.
 REM
 REM  Usage: Start-Bonsai-Ninfer.bat [context_tokens]   default 163840
 REM  Max context on 12 GB is ~181K (192K is refused at startup).
+REM  For 256K long context (ring KV): use Start-Bonsai-Ninfer-256K.bat instead.
 REM ============================================================
 setlocal
 set CTX=%~1

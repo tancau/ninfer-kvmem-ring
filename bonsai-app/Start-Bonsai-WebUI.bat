@@ -16,6 +16,7 @@ REM  ZCode can keep pointing at http://localhost:8080/v1  (the shim proxies it).
 REM  model id: bonsai2-27b
 REM
 REM  Usage: Start-Bonsai-WebUI.bat [context_tokens]   default 163840
+REM  For 256K long context (ring KV): use Start-Bonsai-WebUI-256K.bat instead.
 REM ============================================================
 setlocal
 set CTX=%~1
