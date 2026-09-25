@@ -1,5 +1,13 @@
 # NInfer-3090
 
+> **Fork note — validated on RTX 3060 12 GB, not 3090.** Everything below this box is
+> the upstream `ninfer-3090` documentation, written for a 24 GB RTX 3090. This working
+> copy ports KVMem-style ring KV into the engine and is validated on
+> **RTX 3060 12 GB / sm_86 / Windows 10** (96K device pool serving 256K logical context).
+> Start here: [`README-RING.md`](README-RING.md) (ring design + usage),
+> [`bonsai-app/BENCH-RESULTS.md`](bonsai-app/BENCH-RESULTS.md) (all measured numbers,
+> all on the 3060). Upstream 3090 figures are kept as comparisons, not targets.
+
 NInfer-3090 is a specialized C++20/CUDA inference engine for **Qwen3.8-27B** and Qwen3.6 on one
 24 GB NVIDIA GeForce RTX 3090. Qwen3.8-27B is a first-class, tested target: the native SM86
 runtime loads its official groupwise `.ninfer` artifact, serves OpenAI- and Anthropic-compatible
