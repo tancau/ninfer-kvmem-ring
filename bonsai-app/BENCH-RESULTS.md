@@ -611,3 +611,40 @@ rule 评分 → 见 §十一 坑 2/3。
 - 同一 prompt 重复请求会 100% 命中前缀缓存（0.3 s 返回，不走 prefill）——这是设计行为。
   复现长 prefill 必须每次用唯一前缀。
 
+## 十四、速度开关矩阵（实测，含三处更正）
+
+方法：ring 256K 同配置，逐配置重启引擎，测 4K/16K/64K prefill + decode。
+**decode 一律取引擎自报值**（`req#N done` 行的 `decode X tok/s`），每配置 5 次取中位。
+
+| 配置 | 4K prefill | 16K prefill | 64K prefill | decode 中位（范围） | 显存 | 结论 |
+|---|---:|---:|---:|---:|---:|---|
+| baseline | 587.5 | 469.1 | 233.7 | 74.1（71.9–78.2） | 10305 | — |
+| **`--prefill-cublas`** | 607.9<br>**+3.5%** | 486.1<br>**+3.6%** | 240.4<br>**+2.9%** | 71.3（70.1–77.4） | 10310 | ✅ **建议开**（prefill 稳定小赚，decode 噪声内，显存 +5 MiB） |
+| `--embedding-q4` | — | — | — | — | — | ❌ **制品不兼容** |
+| `--lm-head-q6` | — | — | — | — | — | ❌ **制品不兼容** |
+| `--mlp-a8-decode` | 621.8<br>+5.8% | 489.9<br>+4.4% | 236.2<br>+1.1% | 65.5（**55.3–88.7**） | 10293 | ⚠️ **不建议**（prefill 小赚，但 decode 抖动 ±25%） |
+
+### 三处更正（相对此前的记录）
+
+1. **`--prefill-cublas` 不是 1.63–1.83x，实测 +2.9–3.6%。** 此前那条数字应是在 **dense 160K**
+   （显存宽裕、cublas tile 更大）下测的；ring 模式下 prefill 走另一条实现，收益大幅缩小。
+   仍建议开：稳定小赚、几乎零代价。
+
+2. **`--embedding-q4` / `--lm-head-q6` 对本制品不可用**（不是"没开"，是"开不了"）：
+
+   ```
+   FATAL server failed during startup |
+     --embedding-q4 requires text/token_embedding to be stored as row-split Q8_G32
+   FATAL server failed during startup |
+     --lm-head-q6   requires text/output_head   to be stored as row-split Q8_G32
+   ```
+
+   本制品的 embedding / output_head 是 **三值 `t2_g128_fp16`**，两个开关要求 **Q8_G32** 存储。
+   所以此前记录的"embedding-q4 +24.3K ctx、lm-head-q6 +12.9K ctx"**对本制品无效**——
+   要它们生效必须重新转换制品（把 embedding/head 改成 Q8）。
+
+3. **decode 不能用客户端计时。** 同一配置单次测量在 62–78 t/s 之间跳（±20%），
+   据此得出的"mlp-a8-decode 掉 20%"是**噪声**，不是结论。改用引擎自报值后：
+   baseline 74.1（±4%，很稳），mlp-a8-decode 中位 65.5 但范围 **55.3–88.7**——
+   真实结论是该开关**引入 decode 抖动**，而非单纯变慢。
+
