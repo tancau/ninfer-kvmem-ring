@@ -502,3 +502,32 @@ LCBv6 90.07 ≈ 90.05）——ZCode 场景押对了；③ reasoning effort 必�
 复现：`eval/configs/bonsai2_27b_ring.yaml`（suite `humaneval_plus`）；
 本次运行目录 `eval/runs/20260924T202723Z-89f9e0aa`。
 
+## 十一、评测避坑清单（本机实测踩过的）
+
+跑一遍仓库自带的 `eval/` harness，踩到 9 个坑。前 3 个会导致**分数完全错误**，必须知道。
+
+### 会算错分的（严重）
+
+| # | 坑 | 现象 | 修法 |
+|---|---|---|---|
+| 1 | `humaneval_plus` 沙箱未启用 | `execute_code_in_sandbox` 在 `use_sandbox=False` 时返回 `{'error': ...}` 且**不抛异常**，适配器取不到 `status` → **每题判 False，总分 0** | 启用 Docker 沙箱，或用等价子进程本地执行重打分（预测已落盘，不必重跑 GPU）。建议给 harness 加 fail-fast |
+| 2 | NIAH 的 `judge_strategy: rule` | 走 `exact_match`（整串归一化逐字比对）。模型答对但省了框架前缀（如漏掉 "The best thing to do in San Francisco is"）→ **判 0** | 用 LLM judge（EvalScope 对 NIAH 的默认，`llm_judge_default = True`） |
+| 3 | NIAH 的 LLM 裁判 prompt 含全文 | 上游 `question = task_state.input_text` 是**整个渲染后的 64K prompt** → 每个样本要跑两条 65K 请求（主请求 + 裁判），耗时翻倍 | 补丁：`question = self.retrieval_question`（短问题）。见 `eval/patches/needle_haystack_judge_prompt.patch` |
+
+### 会拖慢或误导的
+
+| # | 坑 | 修法 |
+|---|---|---|
+| 4 | LLM 裁判默认走模板 xhigh 思考，`max_tokens 4096` | 裁判 `generation_config` 加 `extra_body.enable_thinking: false` |
+| 5 | `eval/README.md` 的命令是 Linux 路径（`eval/.venv/bin/python`） | Windows 用 `eval\.venv\Scripts\python.exe`；README 应补双平台 |
+| 6 | `eval/configs/qwen3_6_35b_needle_haystack.yaml` 硬编码原作者 Linux 路径（`/home/neroued/...`） | 参数化/环境变量，或像本仓库新增的 `bonsai2_27b_ring_niah.yaml` 一样写本机路径 |
+| 7 | README 提到的 `--check-runtime` 在 1.10.0 里不存在 | 改文档（`validate` 无此 flag） |
+| 8 | Python 3.14 装不上 EvalScope 栈 | 用 Python 3.12（`uv venv --python 3.12`）；本机 3.14 是默认解释器，容易踩 |
+| 9 | 拼长 prompt 前不换算 token | 我按字符估 token 错了 4 倍，130K 请求撞 `context_length_exceeded`（引擎行为正确，是我的估算错）。**先小样本实测 `prompt_tokens` 再放大** |
+
+### 环境噪音（无害）
+
+- `matplotlib` 在无头 Windows 上报 `Starting a Matplotlib GUI outside of the main thread`，图仍正常生成。
+- 退出时 `atexit` 里 tkinter 报 `main thread is not in main loop`，不影响结果。
+- `read` 工具不支持 PDF；白皮书需用 `pypdf` 提取文本（本机已装）。
+

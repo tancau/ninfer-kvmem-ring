@@ -1,0 +1,15 @@
+--- a/evalscope/benchmarks/needle_haystack/needle_haystack_adapter.py
++++ b/evalscope/benchmarks/needle_haystack/needle_haystack_adapter.py
+@@
+         # Get metadata from task state
+         context_length = task_state.metadata.get('context_length', 0)
+         depth_percent = task_state.metadata.get('depth_percent', 0)
+-        question = task_state.input_text
++        # Local patch (ninfer-kvmem-ring): upstream used `task_state.input_text`, which is the
++        # ENTIRE rendered prompt (the full 64K/128K haystack). Re-sending it to the judge doubles
++        # the long-context work per sample and the judge does not need the document to compare an
++        # answer against the reference. Use the short retrieval question instead.
++        question = self.retrieval_question
+ 
+         # Get grading response
+         prompt = ORM_USER_TEMPLATE.format(question=question, gold=reference, pred=filtered_prediction)
