@@ -648,6 +648,37 @@ rule 评分 → 见 §十一 坑 2/3。
    baseline 74.1（±4%，很稳），mlp-a8-decode 中位 65.5 但范围 **55.3–88.7**——
    真实结论是该开关**引入 decode 抖动**，而非单纯变慢。
 
+## 十六、MTP 开关 A/B（3060 实测：MTP 是正收益）
+
+背景：第三方三档包称 MTP 在小显存是**负收益**（llama-KVMem 线实测 decode −43%），
+且刻意不发 MTP。本机 launchers 全开 `--spec mtp`，但**从未测过关 MTP 的基线**——补上。
+
+方法：文本 ring 256K（**去掉 `--vision`**，见下），同负载 5 次 decode（128 token），
+取引擎自报中位。两组各一次引擎重启。
+
+| 配置 | decode 中位（范围） | MTP 接受率 | sanity 17×23 |
+|---|---:|---|---|
+| `--spec mtp --draft-tokens 3 --lm-head-draft` | **77.8**（72.0–79.5） | 58.5% | 正常 |
+| 无 `--spec` | **37.2**（35–38，极稳） | — | 391 ✅ |
+
+**结论：3060 上 MTP ≈ 2.1x，launchers 保持现状。** 与第三方线的 −43% 相反——
+差异来源：不同引擎线（franken/v0.11 vs dev fork v1.0.8）、不同投机实现
+（MTP3+提案头 vs 他们的配置）、不同 KV（nvfp4 vs fp8/q4）。**投机是正是负与卡无关，
+与实现有关，不可跨引擎搬运结论。**
+
+附带发现（启动约束）：
+
+```
+FATAL ... --vision-residency overlay needs 816 MiB of evict-ranked weights ...,
+but ... provide 656 MiB
+```
+
+去掉 `--spec` 后，vision-overlay 借不到足够的 evict 权重，引擎**拒绝启动**。
+所以"关 MTP + 开视觉"在此构建上是不可能的组合——A/B 双方统一去掉 `--vision`，
+测的是纯文本 decode，不影响结论（视觉与 decode 速度无关）。
+
+日期注：本节及之后时间为 2026-09-26（过零点）。
+
 ## 十五、kernel mask 快路径（实验性，未部署）
 
 **状态：已实现、已验证正确、已证伪收益，保留在分支里，不进生产。**
