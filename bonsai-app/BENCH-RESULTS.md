@@ -650,7 +650,7 @@ rule 评分 → 见 §十一 坑 2/3。
 
 ## 十六、MTP 开关 A/B（3060 实测：MTP 是正收益）
 
-背景：第三方三档包称 MTP 在小显存是**负收益**（llama-KVMem 线实测 decode −43%），
+背景：沈三殊的第三方三档包称 MTP 在小显存是**负收益**（llama-KVMem 线实测 decode −43%），
 且刻意不发 MTP。本机 launchers 全开 `--spec mtp`，但**从未测过关 MTP 的基线**——补上。
 
 方法：文本 ring 256K（**去掉 `--vision`**，见下），同负载 5 次 decode（128 token），

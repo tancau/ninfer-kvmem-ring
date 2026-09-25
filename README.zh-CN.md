@@ -71,7 +71,7 @@ nvfp4 KV 相对 rk8v4 是 +0.17% PPL，噪声级。
 
 - 引擎：`iamwavecut/ninfer-3090` 分支 `franken/v0.11`（上游 `ashalliants/ninfer-3090` ← `Neroued/ninfer`）
 - 模型：PrismML 三元 Bonsai 2 27B（基座 Qwen3.8-27B），制品来自 WaveCut
-- 环形 KV 思想来源：KVMem；第三方团队的先例工作亦有启发（未复用其代码）；NInfer 上游与 prefill 数据来自公开资料
+- 环形 KV 思想来源：KVMem；B 站 UP 主沈三殊（https://space.bilibili.com/85280961）的先例工作亦有启发（未复用其代码）；NInfer 上游与 prefill 数据来自公开资料
 - 评测协议对齐 PrismML 白皮书附录 B（EvalScope，温度 1.0 / top-p 0.95 / top-k 20，xhigh）
 
 ## 仓库内容
