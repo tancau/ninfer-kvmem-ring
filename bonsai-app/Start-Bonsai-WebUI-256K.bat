@@ -43,7 +43,9 @@ set NINFER_KV_RETRIEVE=12288
 set NINFER_HOST_PAGEABLE=1
 
 echo Starting NInfer engine on 8081 (RING ctx %CTX% / pool %POOL%) ...
-start "Bonsai-2 Engine RING (8081)" "%SRV%" "%MODEL%" --model-id bonsai2-27b --host 127.0.0.1 --port 8081 --max-context %CTX% --kv-capacity %POOL% --kv-dtype nvfp4 --gdn-state-fp16 --spec mtp --draft-tokens 3 --lm-head-draft --vision --vision-residency overlay --vision-max-merged 12288
+REM --default-thinking-budget 8192: fuse against runaway xhigh thinking
+REM (measured 31,360 tokens / 9m44s on one item); normal questions use <200.
+start "Bonsai-2 Engine RING (8081)" "%SRV%" "%MODEL%" --model-id bonsai2-27b --host 127.0.0.1 --port 8081 --max-context %CTX% --kv-capacity %POOL% --kv-dtype nvfp4 --gdn-state-fp16 --spec mtp --draft-tokens 3 --lm-head-draft --default-thinking-budget 8192 --vision --vision-residency overlay --vision-max-merged 12288
 
 echo Waiting for the engine to become ready ...
 :wait
