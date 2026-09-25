@@ -531,3 +531,68 @@ LCBv6 90.07 ≈ 90.05）——ZCode 场景押对了；③ reasoning effort 必�
 - 退出时 `atexit` 里 tkinter 报 `main thread is not in main loop`，不影响结果。
 - `read` 工具不支持 PDF；白皮书需用 `pypdf` 提取文本（本机已装）。
 
+## 十二、NIAH 长上下文（64K，环通路实测）
+
+**结果：22 样本，accuracy 0.9591**（英文 11/11 = 100%，中文 10/11 = 90.9%）。
+
+配置：`eval/configs/bonsai2_27b_ring_niah.yaml`，64K 上下文（`Context#65536`），
+中英双语 × 11 个深度（0%–100%），thinking 关闭，LLM 裁判（指向本机引擎），
+rule 评分 → 见 §十一 坑 2/3。
+
+| 子集 | 通过 | 热力图 |
+|---|---|---|
+| English | **11 / 11 = 100%** | `bench-figures/niah-64k-english.png`（全绿） |
+| Chinese | **10 / 11 = 90.9%** | `bench-figures/niah-64k-chinese.png`（仅 Depth#100 红） |
+| 合计 | 21 / 22 满分 + 1 个 0.1 | EvalScope 报 0.9591 |
+
+**唯一的失败：中文子集 Depth#100**（针埋在文档最末端）。核实过：
+
+- 针**确实在 prompt 里**（11/11 样本的 prompt 都含 `San Francisco`）→ 不是数据集/构造问题
+- 模型答 `The provided text does not contain information about San Francisco.`（直接否认）
+- LLM 裁判给最低档 `[[1]]`（1/10 → 0.1），与"完全无关"的档位一致
+- 英文子集同深度（Depth#100）**通过**，所以是"针在最末端 + 中文语料"这一档的边缘失败
+
+**结论**：环通路在 64K 下，**针埋在 0%–90% 任何位置都能稳定捞出**（英文全深度、中文 0–90），
+只有"最末端 + 中文"这一档漏了 1 次。考虑到 64K < 96K 窗口（全程未触发降级），
+这一档反映的是**模型本身**的边缘行为，而非环通路退化。
+
+热力图由 EvalScope 自动生成（`reports/bonsai2-27b/needle_haystack_heatmap_{english,chinese}.png`），
+已复制到 `bonsai-app/bench-figures/` 便于引用。
+
+## 十三、长 prefill 崩溃：复现与插桩（进行中）
+
+**现象**：`ninfer-serve.exe` 观察到 4 次非正常退出。
+
+| # | 时间 | 场景 | 签名 |
+|---|---|---|---|
+| 1 | 02:52:57 | 64K prefill + 并发排队 | fail-fast `0xc0000409` @ `ucrtbase.dll+0x7286e` |
+| 2 | ~03:19:47 | 129K 请求结束、空闲 | 无 WER 事件、无 stderr |
+| 3 | ~07:44:02 | 65K prefill 中请求被 `cancel` 后 | 无 WER 事件 |
+| 4 | 13:26:39 | 64K prefill 中途（单客户端） | fail-fast `0xc0000409` @ `ucrtbase.dll+0x7286e`（与 #1 逐字相同） |
+
+`0xc0000409` = `STATUS_STACK_BUFFER_OVERRUN`；模块与偏移在 #1/#4 完全一致 → 指向同一条确定性代码路径，
+最可能是 `std::terminate` → `abort()`。
+
+**插桩**（`apps/serve/main.cpp`，仅崩溃时输出，不影响正常运行）：
+
+| handler | 触发 | 输出 |
+|---|---|---|
+| `std::set_terminate` | 未捕获 C++ 异常 | `NINFER-CRASH kind=std::terminate detail=<what()>`，退出码 **42** |
+| `_set_invalid_parameter_handler` | CRT 参数校验失败 | `kind=invalid_parameter`，退出码 **43** |
+| `SetUnhandledExceptionFilter` | SEH 异常 | `kind=unhandled_exception code=... addr=...` |
+
+**复现结果（重要）**：
+
+| 场景 | 样本数 | 崩溃 |
+|---|---:|---:|
+| 合成复现：串行 65K 全量 prefill（唯一前缀，见 `eval/repro/long_prefill_crash.py`） | 6 | **0** |
+| 真实 NIAH 64K 全程（22 样本，含 22 次 64K prefill） | 22 | **0** |
+| 合计 | **28** | **0** |
+
+⇒ **"干净串行的长 prefill"不足以触发**。四次死亡都发生在**并发排队 / 请求取消 / 空闲边界**，
+与干净串行场景不符。下一步应针对"prefill 中途取消连接"与"并发长请求"构造复现
+（#3、#4 都紧跟 `cancelled` 请求）。
+
+WER 本地转储已开启（`HKLM\...\LocalDumps\ninfer-serve.exe` → 全量 dump ×5），
+但 Release 构建**无 PDB**，dump 难以符号化；插桩输出是主要诊断手段。
+

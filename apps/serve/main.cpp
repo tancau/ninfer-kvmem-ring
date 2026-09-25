@@ -9,12 +9,18 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
+
+#if defined(_WIN32)
+#    include <windows.h>
+#endif
 
 namespace {
 
@@ -25,9 +31,56 @@ void handle_signal(int) {
     if (server != nullptr) { server->stop(); }
 }
 
+// --- crash instrumentation (local addition) ---------------------------------
+// The engine has been observed to die with 0xc0000409 in ucrtbase.dll (a fail-fast, most
+// likely abort() reached through std::terminate) with no diagnostic output. These handlers
+// print one line naming the failure and exit with a distinct code so the cause is visible
+// in the log and the exit code, instead of a silent fail-fast.
+void crash_line(const char* kind, const char* detail) {
+    std::fprintf(stderr, "NINFER-CRASH kind=%s detail=%s\n", kind, detail);
+    std::fflush(stderr);
+    std::fflush(stdout);
+}
+
+void ninfer_terminate_handler() {
+    const char* what = "unknown";
+    if (std::current_exception()) {
+        try {
+            std::rethrow_exception(std::current_exception());
+        } catch (const std::exception& exception) { what = exception.what(); } catch (...) {
+            what = "non-std exception";
+        }
+    }
+    crash_line("std::terminate", what);
+    std::_Exit(42);
+}
+
+#if defined(_WIN32)
+void ninfer_invalid_parameter_handler(const wchar_t*, const wchar_t*, const wchar_t*, unsigned int,
+                                      uintptr_t) {
+    crash_line("invalid_parameter", "");
+    std::_Exit(43);
+}
+
+LONG WINAPI ninfer_unhandled_exception_filter(EXCEPTION_POINTERS* info) {
+    char buffer[256];
+    std::snprintf(buffer, sizeof(buffer), "code=0x%08lX addr=%p",
+                  static_cast<unsigned long>(info->ExceptionRecord->ExceptionCode),
+                  info->ExceptionRecord->ExceptionAddress);
+    crash_line("unhandled_exception", buffer);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+
 } // namespace
 
 int main(int argc, char** argv) {
+    std::set_terminate(ninfer_terminate_handler);
+#if defined(_WIN32)
+    _set_invalid_parameter_handler(ninfer_invalid_parameter_handler);
+    SetUnhandledExceptionFilter(ninfer_unhandled_exception_filter);
+#endif
+
     ninfer::serve::ServeOptions options;
     try {
         options = ninfer::serve::parse_serve_options(argc, argv);
