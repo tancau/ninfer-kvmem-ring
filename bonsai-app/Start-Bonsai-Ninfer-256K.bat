@@ -52,7 +52,7 @@ echo   context  : %CTX% tokens logical / %POOL% tokens device pool (nvfp4 KV)
 echo   api      : http://127.0.0.1:8080/v1  (model id: bonsai2-27b)
 echo.
 
-"%SRV%" "%MODEL%" --model-id bonsai2-27b --host 127.0.0.1 --port 8080 --max-context %CTX% --kv-capacity %POOL% --kv-dtype nvfp4 --gdn-state-fp16 --spec mtp --draft-tokens 3 --lm-head-draft --default-thinking-budget 8192 --vision --vision-residency overlay --vision-max-merged 12288
+"%SRV%" "%MODEL%" --model-id bonsai2-27b --host 127.0.0.1 --port 8080 --max-context %CTX% --kv-capacity %POOL% --kv-dtype nvfp4 --gdn-state-fp16 --spec mtp --draft-tokens 3 --lm-head-draft --prefill-cublas --default-thinking-budget 8192 --vision --vision-residency overlay --vision-max-merged 12288
 
 echo.
 echo [ninfer-serve exited]
