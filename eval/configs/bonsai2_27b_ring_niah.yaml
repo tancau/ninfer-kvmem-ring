@@ -34,9 +34,22 @@ suites:
           seed: 42
           extra_body:
             enable_thinking: false
-        backend_args:
+        backend_args: &niah_backend_args
           subset_list: [english]
-          judge_strategy: rule
+          # NIAH's own default judge is the LLM judge (`llm_judge_default = True`).
+          # EvalScope's rule judge is exact_match on the whole normalized string, which
+          # fails a correct-but-paraphrased answer (e.g. the model drops the
+          # "The best thing to do in San Francisco is" framing). We use the LLM judge
+          # pointed at the local engine; the self-judge caveat is documented in
+          # bonsai-app/BENCH-RESULTS.md.
+          judge_strategy: llm
+          judge_model_args:
+            model_id: bonsai2-27b
+            api_url: http://127.0.0.1:8081/v1
+            api_key: EMPTY
+            generation_config:
+              temperature: 0.0
+              max_tokens: 4096
           dataset_args:
             local_path: C:/Users/Administrator/.cache/modelscope/datasets/AI-ModelScope--Needle-in-a-Haystack-Corpus/snapshots/master
             extra_params:
@@ -58,8 +71,8 @@ suites:
         max_concurrency: 1
         generation: *retrieval_generation
         backend_args:
+          <<: *niah_backend_args
           subset_list: [english, chinese]
-          judge_strategy: rule
           dataset_args:
             local_path: C:/Users/Administrator/.cache/modelscope/datasets/AI-ModelScope--Needle-in-a-Haystack-Corpus/snapshots/master
             extra_params:
@@ -81,8 +94,8 @@ suites:
         max_concurrency: 1
         generation: *retrieval_generation
         backend_args:
+          <<: *niah_backend_args
           subset_list: [english, chinese]
-          judge_strategy: rule
           dataset_args:
             local_path: C:/Users/Administrator/.cache/modelscope/datasets/AI-ModelScope--Needle-in-a-Haystack-Corpus/snapshots/master
             extra_params:
@@ -104,8 +117,8 @@ suites:
         max_concurrency: 1
         generation: *retrieval_generation
         backend_args:
+          <<: *niah_backend_args
           subset_list: [english, chinese]
-          judge_strategy: rule
           dataset_args:
             local_path: C:/Users/Administrator/.cache/modelscope/datasets/AI-ModelScope--Needle-in-a-Haystack-Corpus/snapshots/master
             extra_params:
