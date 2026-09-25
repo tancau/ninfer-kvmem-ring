@@ -7,6 +7,8 @@
 > Start here: [`README-RING.md`](README-RING.md) (ring design + usage),
 > [`bonsai-app/BENCH-RESULTS.md`](bonsai-app/BENCH-RESULTS.md) (all measured numbers,
 > all on the 3060). Upstream 3090 figures are kept as comparisons, not targets.
+>
+> 中文说明：[`README.zh-CN.md`](README.zh-CN.md)（设计、快速开始、实测数据、致谢）。
 
 NInfer-3090 is a specialized C++20/CUDA inference engine for **Qwen3.8-27B** and Qwen3.6 on one
 24 GB NVIDIA GeForce RTX 3090. Qwen3.8-27B is a first-class, tested target: the native SM86
