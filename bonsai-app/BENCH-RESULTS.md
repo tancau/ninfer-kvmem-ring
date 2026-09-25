@@ -583,16 +583,28 @@ rule 评分 → 见 §十一 坑 2/3。
 
 **复现结果（重要）**：
 
-| 场景 | 样本数 | 崩溃 |
+| 触发条件 | 样本 | 崩溃 |
 |---|---:|---:|
-| 合成复现：串行 65K 全量 prefill（唯一前缀，见 `eval/repro/long_prefill_crash.py`） | 6 | **0** |
+| 干净串行长 prefill（唯一前缀，`eval/repro/long_prefill_crash.py`） | 6 | **0** |
 | 真实 NIAH 64K 全程（22 样本，含 22 次 64K prefill） | 22 | **0** |
-| 合计 | **28** | **0** |
+| **prefill 中途 FIN 断连**（`abort_prefill_crash.py close`） | 8 | **0** |
+| **两条并发 64K 请求 + 中途断连**（`... pair`） | 6 | **0** |
+| 合计 | **42** | **0** |
 
-⇒ **"干净串行的长 prefill"不足以触发**。四次死亡都发生在**并发排队 / 请求取消 / 空闲边界**，
-与干净串行场景不符。下一步应针对"prefill 中途取消连接"与"并发长请求"构造复现
-（#3、#4 都紧跟 `cancelled` 请求）。
+⇒ 三种最可疑的条件**全部排除**：干净串行、中途取消、并发排队都无法触发。
+四次死亡都发生在并发/取消/空闲边界，但**构造同样的边界也不崩**，说明触发条件更隐蔽
+（可能是时序窗口、内存压力或运行时长相关的罕见路径）。
 
-WER 本地转储已开启（`HKLM\...\LocalDumps\ninfer-serve.exe` → 全量 dump ×5），
-但 Release 构建**无 PDB**，dump 难以符号化；插桩输出是主要诊断手段。
+**当前处置**：
+
+1. **插桩保留进生产**——三个 handler 只在崩溃路径执行，零开销；下次崩溃会自动留下
+   `NINFER-CRASH kind=... detail=...` 与退出码 42/43，可就地取证。
+2. WER 全量 dump 已配置（`HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\ninfer-serve.exe`）。
+3. Release 构建无 PDB，dump 难符号化；若崩溃再现，插桩输出是主要线索。
+4. 罕见崩溃（观测 ~4 次 / 数小时运行）不阻塞生产：干净长请求路径已 42 次零故障验证。
+
+**已知的非崩溃行为**（正常，勿误判）：
+
+- 同一 prompt 重复请求会 100% 命中前缀缓存（0.3 s 返回，不走 prefill）——这是设计行为。
+  复现长 prefill 必须每次用唯一前缀。
 
