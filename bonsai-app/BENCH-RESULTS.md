@@ -344,9 +344,12 @@ Apple Silicon（Table 6，PQ2_0 + Metal）：M5 Max 46.8 / 765；M5 Pro 27.7 / 3
    这正是"12G 老卡跑 256K"这套方案的实际价值。
 3. **架构规律（白皮书 §D）**：PTQ1_0 在 **Ada** 与 L4 上更快（4090 96.7 > 90.9），
    PQ2_0 在 **Ampere / Hopper / Blackwell / Apple** 上更快（A100 74.0 > 54.6，H100 103.2 > 77.3）。
-   ⚠️ **RTX 3060 是 Ampere（GA106，sm_86），不是 Ada**——按此规律，PQ2_0 式
-   （更简单的 2-bit 解包、2.16 bpw）在我们卡上应比 PTQ1_0 式更快。
-   本机制品走的是 `t2_g128_fp16`（近 PTQ1_0 的 1.76 bpw 路线），**这是潜在优化方向**。
+   ⚠️ **RTX 3060 是 Ampere（GA106，sm_86），不是 Ada**。
+   **好消息：本机制品本来就在 PQ2_0 路线上**——转换配方用的是
+   `--source ternary=Ternary-Bonsai-2-27B-PQ2_0.gguf`，容器格式 `t2_g128_fp16` 是
+   "2-bit codes + 每 128 列一个 fp16 scale" = 2 + 16/128 = **2.125 bpw**，
+   正是白皮书 PQ2_0 的块格式（34 字节 / 128 权重 = 2.125 bpw）。
+   ⇒ 在 Ampere 上更快的那个打包，我们**已经在用**，无需切换（此前的"应换 PQ2_0"判断有误，已更正）。
 
 口径声明：白皮书是 llama.cpp 后端、纯自回归；本机是 NInfer 引擎 + MTP 投机 + ring/nvfp4，
 runtime 与协议都不同，数字只对量级不对点；本机行严格对齐附录 D（depth 0 / batch 1 / 预热 3 次）
