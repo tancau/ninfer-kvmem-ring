@@ -335,16 +335,17 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
         // __syncthreads() converged. With a retrieval selection of ~192/4096 pages this
         // removes ~95% of key-tile work in deep decode. Dense (bitmap == nullptr) always
         // takes the active path, reproducing the original behaviour bit-for-bit.
-        const bool tile_active = [&] {
+        const auto tile_has_selected_keys = [&](int tile_k0) {
             if (selected_blocks == nullptr) { return true; }
-            const int lo = k0 < split_start ? split_start : k0;
-            const int hi = k0 + Bc > split_end ? split_end : k0 + Bc;
+            const int lo = tile_k0 < split_start ? split_start : tile_k0;
+            const int hi = tile_k0 + Bc > split_end ? split_end : tile_k0 + Bc;
             for (int key = lo; key < hi; key += kPagedKVPageShift) {
                 const int page = key >> kPagedKVPageShift;
                 if (((selected_blocks[page >> 5] >> (page & 31)) & 1U) != 0U) { return true; }
             }
             return false;
-        }();
+        };
+        const bool tile_active = tile_has_selected_keys(k0);
 
         if (tile_active) {
 #pragma unroll 1
@@ -366,8 +367,8 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
                           make_int4(0, 0, 0, 0));
             }
         }
-        }  // if (tile_active)
         __syncthreads();
+        }  // if (tile_active)
 
         if (tile_active && warp < ProducerWarps) {
             const int row_base = warp * 16;
@@ -514,7 +515,7 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
             }
             }  // else tile_active (V expand)
         }
-        __syncthreads();
+        if (tile_active) { __syncthreads(); }
 
         if constexpr (CompactKVStage) {
             if (tile_active) {
@@ -541,12 +542,15 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
                               make_int4(0, 0, 0, 0));
                 }
             }
-            }  // if (tile_active)
             __syncthreads();
+            }  // if (tile_active)
         }
 
         const bool has_next = kb + 1 < key_blocks;
-        if (has_next) {
+        // v2: skip the NEXT tile's HBM prefetch (and its wait below) when it has no
+        // selected pages. Same CTA-uniform predicate, so convergence is preserved.
+        const bool next_active = has_next && tile_has_selected_keys(k0 + Bc);
+        if (next_active) {
             const int next_k0 = k0 + Bc;
             if ((next_k0 & kPagedKVPageMask) == 0) {
                 physical_page = physical_pages_s[(next_k0 >> kPagedKVPageShift) - first_page];
@@ -589,7 +593,7 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
             }
         }
         }  // if (tile_active)
-        if (has_next) { ninfer::ops::cp_wait<0>(); }
+        if (next_active) { ninfer::ops::cp_wait<0>(); }
         __syncthreads();
     }
 
