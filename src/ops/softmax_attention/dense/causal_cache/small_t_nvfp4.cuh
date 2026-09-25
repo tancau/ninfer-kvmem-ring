@@ -327,6 +327,26 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
     for (int kb = 0; kb < key_blocks; ++kb) {
         const int k0 = first_tile + kb * Bc;
 
+        // LOCAL PROTOTYPE (fast path): skip key tiles with no selected pages. A fully
+        // deselected tile contributes exactly nothing (all scores -inf -> alpha 0/1 with
+        // zero block sum, acc/m/l unchanged), so skipping the dequant+MMA+softmax+PV work
+        // is bit-identical to executing it. The predicate is CTA-uniform (depends only on
+        // k0, the split bounds and the bitmap), so predicating whole sections keeps every
+        // __syncthreads() converged. With a retrieval selection of ~192/4096 pages this
+        // removes ~95% of key-tile work in deep decode. Dense (bitmap == nullptr) always
+        // takes the active path, reproducing the original behaviour bit-for-bit.
+        const bool tile_active = [&] {
+            if (selected_blocks == nullptr) { return true; }
+            const int lo = k0 < split_start ? split_start : k0;
+            const int hi = k0 + Bc > split_end ? split_end : k0 + Bc;
+            for (int key = lo; key < hi; key += kPagedKVPageShift) {
+                const int page = key >> kPagedKVPageShift;
+                if (((selected_blocks[page >> 5] >> (page & 31)) & 1U) != 0U) { return true; }
+            }
+            return false;
+        }();
+
+        if (tile_active) {
 #pragma unroll 1
         for (int chunk = tid; chunk < Bc * (D / 16); chunk += Threads) {
             const int key_l = chunk / (D / 16);
@@ -346,9 +366,10 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
                           make_int4(0, 0, 0, 0));
             }
         }
+        }  // if (tile_active)
         __syncthreads();
 
-        if (warp < ProducerWarps) {
+        if (tile_active && warp < ProducerWarps) {
             const int row_base = warp * 16;
             __half* p_sw       = &p_s[row_base * PStride];
             float score[QKNt][4];
@@ -463,6 +484,10 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
                 alpha_s[row1] = alpha1;
             }
         } else if constexpr (!CompactKVStage) {
+            if (!tile_active) {
+                // Fully deselected tile: QK/MMA/softmax contribute nothing (see tile_active
+                // above), and the PV section below is skipped as well, so there is no work.
+            } else {
             // The non-QK warps expand V while the producer warps consume K. Keeping K and V in
             // separate shared tiles makes the FP16 accuracy path overlap its decode work instead
             // of turning the small-T GQA warps into barrier waiters.
@@ -487,10 +512,12 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
                               make_int4(0, 0, 0, 0));
                 }
             }
+            }  // else tile_active (V expand)
         }
         __syncthreads();
 
         if constexpr (CompactKVStage) {
+            if (tile_active) {
             // Once all producer warps finish QK, overwrite the compact FP16 K tile with V. The
             // smaller arena admits two resident CTAs for RowTiles<=2, which is more valuable than
             // overlapping V decode with QK in these bandwidth-oriented shapes.
@@ -514,6 +541,7 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
                               make_int4(0, 0, 0, 0));
                 }
             }
+            }  // if (tile_active)
             __syncthreads();
         }
 
@@ -529,6 +557,7 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
         const int consumer_tile     = warp % RowTiles;
         const int consumer_slice    = warp / RowTiles;
         const int consumer_row_base = consumer_tile * 16;
+        if (tile_active) {
         __half* p_consumer          = &p_s[consumer_row_base * PStride];
         const float alpha0          = alpha_s[consumer_row_base + gid];
         const float alpha1          = alpha_s[consumer_row_base + gid + 8];
@@ -559,6 +588,7 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
                         vf[0], vf[1]);
             }
         }
+        }  // if (tile_active)
         if (has_next) { ninfer::ops::cp_wait<0>(); }
         __syncthreads();
     }

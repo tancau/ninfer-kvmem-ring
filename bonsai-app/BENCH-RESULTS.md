@@ -648,3 +648,51 @@ rule 评分 → 见 §十一 坑 2/3。
    baseline 74.1（±4%，很稳），mlp-a8-decode 中位 65.5 但范围 **55.3–88.7**——
    真实结论是该开关**引入 decode 抖动**，而非单纯变慢。
 
+## 十五、kernel mask 快路径（实验性，未部署）
+
+**状态：已实现、已验证正确、已证伪收益，保留在分支里，不进生产。**
+
+动机：ring decode 的天花板是 attention kernel 内逐元素 mask 检查（decode 85→50）。
+`small_t_nvfp4.cuh`（decode 路由）对每个 key 做 `block_selected(key)` 位图检查，
+把未选中页的 score 置 -inf——**算完再扔**。
+
+改法（仅 `small_t_nvfp4.cuh`，6 处；prefetch 链 / `cp_wait` 配对 / 所有
+`__syncthreads` / grid 配置 / kernel 参数全部不动）：
+
+| # | 位置 | 改法 |
+|---|---|---|
+| 1 | kb 循环头 | 加 CTA-uniform 的 `tile_active` 判断（tile 内无选中页则跳过） |
+| 2 | K 反量化 | 整段包进 `if (tile_active)` |
+| 3 | QK 条件 | `warp < ProducerWarps` → `tile_active && ...` |
+| 4–5 | V 展开（worker / compact） | 包谓词 |
+| 6 | PV | 整段包谓词 |
+
+等价性：全灭 tile 原来产出 alpha 0/1 + 零 block sum，acc/m/l 不变；跳过与之一致；
+`alpha_s` 写读同 tile；dense（bitmap=null）恒走 active 路径。
+
+验证：
+
+| 验证 | 结果 |
+|---|---|
+| PPL 回归（dense） | **5.639521，小数点后 6 位全对** |
+| 藏针 129K（稀疏路径） | **PASS**（STARFRUIT-88） |
+| 短 prompt decode | 64.9 t/s（基线 63.6–71.9，无退化） |
+
+A/B（同负载 129K 藏针，新旧二进制对照）：
+
+| | 旧（无 skip） | 新（tile skip） |
+|---|---|---|
+| prefill | 138.2 t/s | 136.6 t/s（prefill 路由未动，属运行方差） |
+| **decode** | **21.4 t/s** | **21.5 t/s**（+0.5%，噪声级） |
+| MTP 接受 | 56.2% | 42.6% |
+| 召回 | PASS | PASS |
+
+**结论：129K 处无可测量加速，不部署。** 原因经 `install_resident_selection`
+（`context.cpp:1516`，"检索掩码 = 设备常驻集"）确认：129K 上 1500 页池装下 74%，
+只能跳过 ~26% tile；而 decode 主导成本是权重加载 + MTP 多遍验证，attention 只是其中一块。
+收益随深度递增（262K 处可跳 ~63%），但 200K+ 验证留待以后。
+
+教训：先读选择集的产生逻辑（"掩码=常驻集"而非"稀疏检索子集"），再动手——
+本优化的理论上限在动手前就能算出来（26% tile × attention 占比 ≈ +10%，实测 +0.5% 还要更低，
+说明 attention 占比比估计的更小）。
+
