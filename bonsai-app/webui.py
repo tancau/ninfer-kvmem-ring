@@ -57,8 +57,8 @@ def build_props():
     return {
         "default_generation_settings": {
             "params": {
-                "n_predict": 16384,
-                "max_tokens": 16384,
+                "n_predict": 32768,
+                "max_tokens": 32768,
                 "temperature": 1.0,
                 "top_p": 0.95,
                 "top_k": 20,
@@ -123,7 +123,7 @@ class Handler(BaseHTTPRequestHandler):
         # EVERY UI generation was silently capped at 8192 total tokens: long thinking hit
         # the cap mid-reasoning and the UI showed "Reasoning Cancelled" with a rushed
         # answer. Map n_predict -> max_tokens (positive values respected; missing or
-        # negative means the UI default, for which we use the advertised 16384).
+        # negative means the UI default, for which we use the advertised 32768).
         if payload and method == "POST" and content_type.startswith("application/json"):
             try:
                 body = json.loads(payload)
@@ -137,7 +137,7 @@ class Handler(BaseHTTPRequestHandler):
                         if isinstance(n_predict, (int, float)) and n_predict > 0:
                             body["max_tokens"] = int(n_predict)
                         else:
-                            body["max_tokens"] = 16384
+                            body["max_tokens"] = 32768
                     payload = json.dumps(body).encode()
             except (ValueError, UnicodeDecodeError):
                 pass
