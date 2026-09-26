@@ -41,9 +41,12 @@ set NINFER_KV_WINDOW=96000
 set NINFER_KV_RETRIEVE=12288
 set NINFER_HOST_PAGEABLE=1
 
-REM --- thinking budget fuse: caps runaway xhigh thinking at 8192 tokens.
+REM --- thinking budget fuse: caps runaway xhigh thinking at 24576 tokens.
 REM Normal questions use far less (sanity: 23-146 tokens); only pathological
 REM cases (measured: 31,360 tokens / 9m44s on one HumanEval item) hit the cap.
+REM v1 value 8192 was TOO LOW: a legitimate creative-coding task
+REM ("3D pelican on a bicycle") burned through 8192 thinking and got cut,
+REM showing "Reasoning Cancelled" with a rushed answer. Raised to 24576.
 REM Raises output-limit stop instead of thinking forever. Tune per machine.
 
 echo Starting NInfer ternary Bonsai 2 27B (RING) ...
@@ -52,7 +55,7 @@ echo   context  : %CTX% tokens logical / %POOL% tokens device pool (nvfp4 KV)
 echo   api      : http://127.0.0.1:8080/v1  (model id: bonsai2-27b)
 echo.
 
-"%SRV%" "%MODEL%" --model-id bonsai2-27b --host 127.0.0.1 --port 8080 --max-context %CTX% --kv-capacity %POOL% --kv-dtype nvfp4 --gdn-state-fp16 --spec mtp --draft-tokens 3 --lm-head-draft --prefill-cublas --default-thinking-budget 8192 --vision --vision-residency overlay --vision-max-merged 12288
+"%SRV%" "%MODEL%" --model-id bonsai2-27b --host 127.0.0.1 --port 8080 --max-context %CTX% --kv-capacity %POOL% --kv-dtype nvfp4 --gdn-state-fp16 --spec mtp --draft-tokens 3 --lm-head-draft --prefill-cublas --default-thinking-budget 24576 --vision --vision-residency overlay --vision-max-merged 12288
 
 echo.
 echo [ninfer-serve exited]
