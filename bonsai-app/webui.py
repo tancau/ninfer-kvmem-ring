@@ -118,11 +118,26 @@ class Handler(BaseHTTPRequestHandler):
 
         # NInfer REQUIRES a "model" field; llama.cpp (and therefore its web UI) treats it as
         # optional for a single-model server. Fill it in so the UI works unmodified.
+        # NInfer also only reads "max_tokens" (falling back to --default-max-tokens 8192
+        # when absent) while the llama.cpp UI sends "n_predict". Without this translation
+        # EVERY UI generation was silently capped at 8192 total tokens: long thinking hit
+        # the cap mid-reasoning and the UI showed "Reasoning Cancelled" with a rushed
+        # answer. Map n_predict -> max_tokens (positive values respected; missing or
+        # negative means the UI default, for which we use the advertised 16384).
         if payload and method == "POST" and content_type.startswith("application/json"):
             try:
                 body = json.loads(payload)
-                if isinstance(body, dict) and "model" not in body:
-                    body["model"] = MODEL_ID
+                if isinstance(body, dict):
+                    if "model" not in body:
+                        body["model"] = MODEL_ID
+                    if "max_tokens" not in body and "max_completion_tokens" not in body:
+                        n_predict = body.get("n_predict")
+                        if isinstance(n_predict, bool):
+                            n_predict = None
+                        if isinstance(n_predict, (int, float)) and n_predict > 0:
+                            body["max_tokens"] = int(n_predict)
+                        else:
+                            body["max_tokens"] = 16384
                     payload = json.dumps(body).encode()
             except (ValueError, UnicodeDecodeError):
                 pass
