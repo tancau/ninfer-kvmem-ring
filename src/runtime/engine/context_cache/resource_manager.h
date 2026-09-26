@@ -18,6 +18,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -1521,11 +1522,26 @@ private:
     }
 
     void require_lane(LaneId lane, LogicalLaneState expected) const {
-        if (lane.value >= lane_count_ || lanes_[lane.value] != expected ||
-            ((expected == LogicalLaneState::Active ||
-              expected == LogicalLaneState::TerminalPending) &&
-             !active_[lane.value].occupied)) {
-            throw std::logic_error("logical lane is not in the required state");
+        // LOCAL DIAGNOSTIC (lane-wedge): the bare message wedged a production engine
+        // (fail_all -> failed_ -> 503 for every later request) with no pointer to the
+        // offending call site. Report lane, expected and actual state so the next
+        // occurrence names it. Behaviour unchanged: still throws.
+        const bool in_range = lane.value < lane_count_;
+        const int actual    = in_range ? static_cast<int>(lanes_[lane.value]) : -1;
+        const bool owned =
+            in_range && (expected != LogicalLaneState::Active &&
+                                 expected != LogicalLaneState::TerminalPending
+                             ? true
+                             : active_[lane.value].occupied);
+        if (!in_range || lanes_[lane.value] != expected || !owned) {
+            std::fprintf(stderr,
+                         "[ninfer] require_lane refused: lane=%u expected=%d actual=%d "
+                         "occupied=%d\n",
+                         lane.value, static_cast<int>(expected), actual, owned ? 1 : 0);
+            throw std::logic_error("logical lane is not in the required state: lane=" +
+                                   std::to_string(lane.value) +
+                                   " expected=" + std::to_string(static_cast<int>(expected)) +
+                                   " actual=" + std::to_string(actual));
         }
     }
 
