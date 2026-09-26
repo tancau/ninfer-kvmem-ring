@@ -1524,7 +1524,16 @@ public:
         Address& address = require_active(handle);
         if (frontier < address.committed_frontier ||
             pages_for_tokens(frontier) > address.page_count) {
-            throw std::invalid_argument("KV committed frontier is invalid");
+            // LOCAL DIAGNOSTIC: the bare message made a production failure
+            // ("KV committed frontier is invalid" on a long reused ZCode session)
+            // undiagnosable. Report the numbers so the next occurrence names its
+            // branch: backward commit vs coverage beyond mapped pages. Behaviour
+            // unchanged: still throws.
+            throw std::invalid_argument(
+                "KV committed frontier is invalid: frontier=" + std::to_string(frontier) +
+                " committed=" + std::to_string(address.committed_frontier) +
+                " pages_for_tokens=" + std::to_string(pages_for_tokens(frontier)) +
+                " mapped_pages=" + std::to_string(address.page_count));
         }
         if (frontier == address.committed_frontier) { return; }
         const std::uint32_t page_size          = static_cast<std::uint32_t>(kPagedKVPageSize);
