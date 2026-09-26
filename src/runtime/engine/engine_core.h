@@ -988,8 +988,21 @@ private:
             if (!request->sequence || !request->lane || request->lane->value != lane) {
                 throw std::logic_error("active cancellation has no sequence binding");
             }
-            (void)request->output.preview_terminal(FinishReason::Cancelled);
             auto aborted = resources_.abort(*instance_.program, *request->lane, *request->sequence);
+            if (aborted.status != ConsumeStatus::Consumed) {
+                // LOCAL FIX (abort-retry): transient refusal (open transaction or pinned
+                // teardown). Keep the slot and retry on a later boundary instead of
+                // failing the request: the client is already gone and nothing waits on
+                // this path. The lane stays TerminalPending with references intact.
+                if (++request->abort_retries > 600) {
+                    throw std::logic_error(
+                        "terminal abort did not consume its sequence after 600 retries, lane=" +
+                        std::to_string(lane));
+                }
+                continue;
+            }
+            request->abort_retries = 0;
+            (void)request->output.preview_terminal(FinishReason::Cancelled);
             request->generation_timings = aborted.timings;
             request->speculative_stats  = std::move(aborted.speculative);
             if (scheduler_.prefill_lane() == lane) { scheduler_.clear_prefill_lane(lane); }

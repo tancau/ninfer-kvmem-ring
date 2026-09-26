@@ -1078,7 +1078,12 @@ public:
         require_lane(lane, LogicalLaneState::TerminalPending);
         AbortResult result = program.abort(sequence);
         if (result.status != ConsumeStatus::Consumed) {
-            throw std::logic_error("Program did not consume aborted sequence");
+            // LOCAL FIX (abort-retry): a transient refusal -- open commit transaction,
+            // staged prefix-fork pins -- must not fail the request. The lane stays
+            // TerminalPending with its references intact; the engine cancel pass
+            // retries on a later boundary (see cancel_active_requests). Behaviour on
+            // permanent refusal is unchanged except the caller caps the retries.
+            return result;
         }
         release_active_references(lane);
         clear_catalog_entry(catalog_.at(active_[lane.value].publication_slot));

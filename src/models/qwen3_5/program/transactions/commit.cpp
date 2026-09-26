@@ -668,16 +668,34 @@ FinishResult ProgramImpl::finish(SequenceHandle sequence) noexcept {
 
 AbortResult ProgramImpl::abort(SequenceHandle sequence) noexcept {
     AbortResult out;
-    if (has_context_transaction() || pending_transaction_ || !valid_sequence(sequence)) {
+    if (has_context_transaction() || pending_transaction_) {
+        // LOCAL DIAGNOSTIC (abort-retry): refusal reason goes to stderr so the next
+        // "did not consume aborted sequence" names its branch. Behaviour unchanged.
+        std::fprintf(stderr, "[ninfer] abort refused: open transaction (context=%d pending=%d)\n",
+                     has_context_transaction() ? 1 : 0, pending_transaction_ ? 1 : 0);
+        return out;
+    }
+    if (!valid_sequence(sequence)) {
+        std::fprintf(stderr, "[ninfer] abort refused: stale sequence handle\n");
         return out;
     }
     const std::uint32_t lane = ContractAccess::lane(sequence).value;
     RequestControl& request  = requests[lane];
     if (request.lifecycle == Lifecycle::Pending || request.lifecycle == Lifecycle::Empty) {
+        std::fprintf(stderr, "[ninfer] abort refused: lane %u lifecycle not active (%d)\n", lane,
+                     static_cast<int>(request.lifecycle));
         return out;
     }
     SequenceState& state = active_sequence(lane);
-    if (!clear_lane_strict(state, request)) { return out; }
+    if (!clear_lane_strict(state, request)) {
+        const bool kv_releasable =
+            state.kv && text_kv_addresses &&
+            text_kv_addresses->can_release_after_deactivate(state.kv->text);
+        std::fprintf(stderr,
+                     "[ninfer] abort refused: lane %u strict teardown blocked (kv_releasable=%d)\n",
+                     lane, kv_releasable ? 1 : 0);
+        return out;
+    }
     out.timings     = request.timings;
     out.speculative = std::move(request.speculative_stats);
     invalidate_lane(lane);
