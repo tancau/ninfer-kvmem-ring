@@ -45,7 +45,12 @@ set NINFER_HOST_PAGEABLE=1
 echo Starting NInfer engine on 8081 (RING ctx %CTX% / pool %POOL%) ...
 REM --default-thinking-budget 24576: fuse against runaway xhigh thinking
 REM (measured 31,360 tokens / 9m44s on one item); normal questions use <200.
-start "Bonsai-2 Engine RING (8081)" "%SRV%" "%MODEL%" --model-id bonsai2-27b --host 127.0.0.1 --port 8081 --max-context %CTX% --kv-capacity %POOL% --kv-dtype nvfp4 --gdn-state-fp16 --spec mtp --draft-tokens 3 --lm-head-draft --prefill-cublas --default-thinking-budget 24576 --vision --vision-residency overlay --vision-max-merged 12288
+REM --request-log-jsonl: post-mortem forensics. Failed requests (e.g. the
+REM "KV committed frontier is invalid" seen in long ZCode sessions) are recorded
+REM with prompt/output tokens + error, so the next occurrence leaves evidence.
+REM Takes effect on next engine start. Log dir created if missing.
+if not exist C:\Bonsai-App\logs mkdir C:\Bonsai-App\logs
+start "Bonsai-2 Engine RING (8081)" "%SRV%" "%MODEL%" --model-id bonsai2-27b --host 127.0.0.1 --port 8081 --max-context %CTX% --kv-capacity %POOL% --kv-dtype nvfp4 --gdn-state-fp16 --spec mtp --draft-tokens 3 --lm-head-draft --prefill-cublas --default-thinking-budget 24576 --request-log-jsonl C:\Bonsai-App\logs\requests-8081.jsonl --vision --vision-residency overlay --vision-max-merged 12288
 
 echo Waiting for the engine to become ready ...
 :wait

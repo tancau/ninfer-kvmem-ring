@@ -54,8 +54,10 @@ echo   artifact : %MODEL%
 echo   context  : %CTX% tokens logical / %POOL% tokens device pool (nvfp4 KV)
 echo   api      : http://127.0.0.1:8080/v1  (model id: bonsai2-27b)
 echo.
+REM --request-log-jsonl: post-mortem forensics for failed requests (takes effect next start).
+if not exist C:\Bonsai-App\logs mkdir C:\Bonsai-App\logs
 
-"%SRV%" "%MODEL%" --model-id bonsai2-27b --host 127.0.0.1 --port 8080 --max-context %CTX% --kv-capacity %POOL% --kv-dtype nvfp4 --gdn-state-fp16 --spec mtp --draft-tokens 3 --lm-head-draft --prefill-cublas --default-thinking-budget 24576 --vision --vision-residency overlay --vision-max-merged 12288
+"%SRV%" "%MODEL%" --model-id bonsai2-27b --host 127.0.0.1 --port 8080 --max-context %CTX% --kv-capacity %POOL% --kv-dtype nvfp4 --gdn-state-fp16 --spec mtp --draft-tokens 3 --lm-head-draft --prefill-cublas --default-thinking-budget 24576 --request-log-jsonl C:\Bonsai-App\logs\requests-8080.jsonl --vision --vision-residency overlay --vision-max-merged 12288
 
 echo.
 echo [ninfer-serve exited]
