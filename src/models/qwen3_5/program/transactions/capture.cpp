@@ -65,6 +65,13 @@ ProgramImpl::inspect_capture(const CaptureOffer& offer, const SharedPrefixHandle
     // satisfy that, and restoring the whole context is exactly what the pool cannot hold. A
     // host-demoted source therefore completes WITHOUT publishing (reuse of it is declined anyway,
     // so nothing consumes the entry). Fully resident sequences keep the normal fast path.
+    // LOCAL FIX (scoped-publish): the prototype declined publishing whenever ANY
+    // mapped page was host-demoted - including the tail beyond this checkpoint.
+    // Past pool capacity the tail is always demoted, so nothing ever banked and
+    // every later turn fell back to root. Only pages within the capture frontier
+    // belong to this checkpoint; the tail is recomputed (or anchored separately)
+    // on reuse, and banked host pages ride the existing H2D restore machinery.
+    const std::uint32_t publish_scan_pages = kv_pages_for_frontier(group.frontier);
     bool publish_private = publish_private_requested;
     bool publish_shared  = publish_shared_requested;
     if ((publish_private || publish_shared) && text_kv_addresses != nullptr &&
@@ -74,21 +81,25 @@ ProgramImpl::inspect_capture(const CaptureOffer& offer, const SharedPrefixHandle
         const SequenceState& seq = active_sequence(lane);
         const auto has_host_pages = [&](const KVAddressSpaceStore& addresses,
                                         const LogicalKVPageStore& pages,
-                                        const KVAddressSpaceHandle& address) {
+                                        const KVAddressSpaceHandle& address,
+                                        std::uint32_t limit_pages) {
             if (!addresses.valid(address)) { return false; }
             const std::uint32_t mapped = addresses.mapped_pages(address);
-            for (std::uint32_t page = 0; page < mapped; ++page) {
+            const std::uint32_t limit  = limit_pages < mapped ? limit_pages : mapped;
+            for (std::uint32_t page = 0; page < limit; ++page) {
                 const LogicalKVPageHandle logical = addresses.logical_page(address, page);
                 if (pages.valid(logical) && pages.host_resident(logical)) { return true; }
             }
             return false;
         };
         bool demoted = false;
-        if (seq.kv && has_host_pages(*text_kv_addresses, *text_kv_pages, seq.kv->text)) {
+        if (seq.kv && has_host_pages(*text_kv_addresses, *text_kv_pages, seq.kv->text,
+                                     publish_scan_pages)) {
             demoted = true;
         }
         if (!demoted && seq.kv && seq.kv->backend && backend_kv_addresses && backend_kv_pages &&
-            has_host_pages(*backend_kv_addresses, *backend_kv_pages, *seq.kv->backend)) {
+            has_host_pages(*backend_kv_addresses, *backend_kv_pages, *seq.kv->backend,
+                           publish_scan_pages)) {
             demoted = true;
         }
         if (demoted) {
