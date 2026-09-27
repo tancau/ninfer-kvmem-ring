@@ -691,7 +691,14 @@ public:
     can_release_reference_after_active_reference(LogicalKVPageHandle handle) const noexcept {
         if (!valid(handle)) { return false; }
         const Page& page = pages_[handle.index_];
-        return page.references != 0 && page.active_references != 0 &&
+        // LOCAL FIX (demote-teardown): Host-demoted pages dropped their active
+        // reference by design, and release preserves their descriptor through
+        // host_replica. Demanding an active reference here made every cancel past
+        // pool capacity unwedgeable (118+ demoted pages vetoed the whole lane).
+        // Fully demoted pages are releasable without one; anything else keeps the
+        // veto, so genuine active-state corruption still throws upstream.
+        return page.references != 0 &&
+               (page.active_references != 0 || page.host_replica) &&
                page.active_references <= page.references && page.writer_references <= 1 &&
                page.source_pins == 0 && !page.destination_pinned;
     }
