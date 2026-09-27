@@ -688,12 +688,30 @@ AbortResult ProgramImpl::abort(SequenceHandle sequence) noexcept {
     }
     SequenceState& state = active_sequence(lane);
     if (!clear_lane_strict(state, request)) {
+        // LOCAL DIAGNOSTIC (teardown-blockers): kv_releasable=0 alone cannot tell pins
+        // apart from lifecycle desync. Count pages by blocking cause so the next wedge
+        // names it: pins = shared/pinned entanglement, active0 = desync, refs0 = leak.
+        std::uint32_t n_pages = 0, n_pins = 0, n_active0 = 0, n_refs0 = 0, n_writer = 0;
+        if (state.kv && text_kv_addresses && text_kv_pages) {
+            n_pages = text_kv_addresses->mapped_pages(state.kv->text);
+            for (std::uint32_t page = 0; page < n_pages; ++page) {
+                const LogicalKVPageHandle logical =
+                    text_kv_addresses->logical_page(state.kv->text, page);
+                if (!text_kv_pages->valid(logical)) { continue; }
+                if (text_kv_pages->source_pins(logical) != 0) { ++n_pins; }
+                if (text_kv_pages->active_address_references(logical) == 0) { ++n_active0; }
+                if (text_kv_pages->address_references(logical) == 0) { ++n_refs0; }
+                if (text_kv_pages->writer_references(logical) > 1) { ++n_writer; }
+            }
+        }
         const bool kv_releasable =
             state.kv && text_kv_addresses &&
             text_kv_addresses->can_release_after_deactivate(state.kv->text);
         std::fprintf(stderr,
-                     "[ninfer] abort refused: lane %u strict teardown blocked (kv_releasable=%d)\n",
-                     lane, kv_releasable ? 1 : 0);
+                     "[ninfer] abort refused: lane %u strict teardown blocked (kv_releasable=%d "
+                     "pages=%u pins=%u active0=%u refs0=%u writer=%u backend=%d)\n",
+                     lane, kv_releasable ? 1 : 0, n_pages, n_pins, n_active0, n_refs0, n_writer,
+                     state.kv && state.kv->backend ? 1 : 0);
         return out;
     }
     out.timings     = request.timings;
