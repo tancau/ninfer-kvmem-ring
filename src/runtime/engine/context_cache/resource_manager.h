@@ -617,7 +617,15 @@ public:
                 has_shared_candidate_evidence(private_baseline.shared_evidence,
                                               SharedCandidateEvidence::ExplicitBoundary) ||
                 has_shared_candidate_evidence(private_baseline.shared_evidence,
-                                              SharedCandidateEvidence::RequestedAutomatic);
+                                              SharedCandidateEvidence::RequestedAutomatic) ||
+                // LOCAL FIX (auto-anchor value): engine-proposed structural anchors
+                // serve the continuing session itself (capped at two per continuation),
+                // so their value is private and certain rather than public and
+                // speculative. Without this, auto anchors can never satisfy the gate
+                // (they accrue no committed demand before anything banks) and no
+                // turn past pool capacity ever banks a checkpoint.
+                has_shared_candidate_evidence(private_baseline.shared_evidence,
+                                              SharedCandidateEvidence::EngineStructural);
 
             std::vector<CaptureScenario> scenarios;
             scenarios.reserve(static_cast<std::size_t>(shared_catalog_count_) + 1U);

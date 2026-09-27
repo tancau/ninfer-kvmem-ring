@@ -339,7 +339,12 @@ RequestBasePlan ProgramImpl::plan_request(const PreparedPromptData& prompt,
             if (rewrite) { existing->rewrite = rewrite; }
             existing->shared      = existing->shared || shared;
             existing->long_anchor = existing->long_anchor || long_anchor;
-            if (shared) { existing->shared_evidence |= evidence; }
+            // LOCAL FIX (evidence-kept): evidence was merged only for shared groups, so
+            // private anchors arrived with None and could never satisfy the
+            // private_candidate_valued gate downstream (nor could explicit client
+            // markers for private anchors). Merge unconditionally; consumers read it
+            // with kind awareness.
+            existing->shared_evidence |= evidence;
         };
         if (base->rewrite_checkpoint) {
             add_capture(base->rewrite_checkpoint->frontier, 0, base->rewrite_checkpoint->kind,
