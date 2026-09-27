@@ -543,22 +543,27 @@ PreparedContextCache prepare_context_cache(
                         SharedCandidateEvidence::EngineObserved, full_prompt_frontier,
                         engine_order++);
     }
-    // LOCAL (pre-tail anchor): bank a reusable checkpoint before the volatile open tail
-    // (last message: a fresh question, or a thinking-bearing reply that clients rewrite
-    // on replay). Rewrite checkpoints sit at the generation prompt, i.e. they cover the
-    // rewritten tail, so a turn whose tail changed has no bankable frontier inside the
-    // stable region and falls back to root. Anchors need no client markers; the planner
-    // still decides whether banking is worthwhile, so this only adds a candidate.
-    // Gated to long prompts: below 32K a full prefill is cheaper than the extra offer,
-    // chunk split and state copy that banking costs.
-    if (full_prompt_frontier >= 32768 && message_count >= 2 &&
-        message_boundaries.size() > message_count - 1) {
-        const std::optional<std::uint32_t> tail_anchor =
-            message_boundaries[message_count - 1];
-        if (tail_anchor && *tail_anchor < full_prompt_frontier) {
-            add_opportunity(PromptCacheMarkerKind::PrivateLongAnchor,
-                            SharedCandidateEvidence::EngineStructural, *tail_anchor,
-                            engine_order++);
+    // LOCAL (pre-tail anchors): bank reusable checkpoints inside the stable region.
+    // Rewrite checkpoints sit at the generation prompt, i.e. they cover the rewritten
+    // tail, so a turn whose tail changed has no bankable frontier and falls back to root.
+    // The volatile tail is not always one message (thinking strip + tool updates + new
+    // turns), so propose several boundaries (1/2/4/8 messages back) and let the planner
+    // bank at most its budgeted few; the next turn matches the longest stable one.
+    // Anchors need no client markers; the planner still decides whether banking is
+    // worthwhile, so these are only candidates.
+    // Gated to long prompts: below 32K a full prefill is cheaper than the extra offers,
+    // chunk splits and state copies that banking costs.
+    if (full_prompt_frontier >= 32768 && message_count >= 2) {
+        for (const std::size_t back : {1U, 2U, 4U, 8U}) {
+            if (back >= message_count) { continue; }
+            const std::size_t index = message_count - back;
+            if (index >= message_boundaries.size()) { continue; }
+            const std::optional<std::uint32_t> tail_anchor = message_boundaries[index];
+            if (tail_anchor && *tail_anchor < full_prompt_frontier) {
+                add_opportunity(PromptCacheMarkerKind::PrivateLongAnchor,
+                                SharedCandidateEvidence::EngineStructural, *tail_anchor,
+                                engine_order++);
+            }
         }
     }
     if (hints.allow_engine_prefix_grid) {
