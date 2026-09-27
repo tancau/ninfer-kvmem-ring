@@ -883,11 +883,16 @@ public:
             }
             if (!private_baseline.publishes_private || !private_baseline.physically_feasible) {
                 // LOCAL DIAGNOSTIC (reserve-trace): this manager-level fallback skip is
-                // silent (no program lines fire). Name it with feasibility.
+                // silent (no program lines fire). Name it with the public assessment
+                // fields (placement as int: 0=DeviceFork, 1=HostSnapshot; transfer
+                // requirement count). Peak internals stay package-private.
                 std::fprintf(stderr,
-                             "[ninfer] reserve skip: manager-fallback (priv=%d feasible=%d)\n",
+                             "[ninfer] reserve skip: manager-fallback (priv=%d feasible=%d "
+                             "placement=%d transfers=%zu)\n",
                              private_baseline.publishes_private ? 1 : 0,
-                             private_baseline.physically_feasible ? 1 : 0);
+                             private_baseline.physically_feasible ? 1 : 0,
+                             static_cast<int>(private_baseline.state_placement),
+                             private_baseline.transfer_requirements.size());
                 program.skip_capture(std::move(offer));
                 return ActiveCaptureReserveResult::Skipped;
             }
