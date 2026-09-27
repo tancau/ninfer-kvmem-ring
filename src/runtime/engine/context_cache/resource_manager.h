@@ -507,7 +507,15 @@ public:
     reserve_active_capture(Program& program, LaneId lane, CaptureOffer&& offer,
                            std::uint32_t blocked_runnable_requests,
                            CancellationFlagView cancellation) {
-        require_lane(lane, LogicalLaneState::Active);
+        if (lane.value < lane_count_ &&
+            lanes_[lane.value] == LogicalLaneState::TerminalPending) {
+            // LOCAL FIX (cancel-capture): a capture for a lane that is going away is
+            // pointless; skip it instead of throwing and wedging the engine. The
+            // engine caller already handles Skipped without arming capture state.
+            program.skip_capture(std::move(offer));
+            return ActiveCaptureReserveResult::Skipped;
+        }
+        require_lane(lane, LogicalLaneState::Active, "capture");
         const bool manager_transaction = !std::holds_alternative<std::monostate>(transaction_);
         const bool program_transaction = program.has_context_transaction();
         if (manager_transaction != program_transaction) {
@@ -994,12 +1002,12 @@ public:
     }
 
     void mark_terminal_pending(LaneId lane) {
-        require_lane(lane, LogicalLaneState::Active);
+        require_lane(lane, LogicalLaneState::Active, "mark");
         lanes_[lane.value] = LogicalLaneState::TerminalPending;
     }
 
     [[nodiscard]] FinishResult finish(Program& program, LaneId lane, SequenceHandle sequence) {
-        require_lane(lane, LogicalLaneState::TerminalPending);
+        require_lane(lane, LogicalLaneState::TerminalPending, "finish");
         if (!std::holds_alternative<std::monostate>(transaction_) ||
             program.has_context_transaction()) {
             throw std::logic_error("terminal finish overlaps an open resource transaction");
@@ -1076,7 +1084,7 @@ public:
         if (lanes_.at(lane.value) == LogicalLaneState::Active) {
             lanes_[lane.value] = LogicalLaneState::TerminalPending;
         }
-        require_lane(lane, LogicalLaneState::TerminalPending);
+        require_lane(lane, LogicalLaneState::TerminalPending, "abort");
         AbortResult result = program.abort(sequence);
         if (result.status != ConsumeStatus::Consumed) {
             // LOCAL FIX (abort-retry): a transient refusal -- open commit transaction,
@@ -1117,7 +1125,7 @@ public:
                 }
                 continue;
             }
-            require_lane(lane, LogicalLaneState::Active);
+            require_lane(lane, LogicalLaneState::Active, "commit");
             switch (result.rows[row].disposition) {
             case CommitDisposition::Active:
                 break;
@@ -1538,7 +1546,7 @@ private:
         return 0;
     }
 
-    void require_lane(LaneId lane, LogicalLaneState expected) const {
+    void require_lane(LaneId lane, LogicalLaneState expected, const char* site) const {
         // LOCAL DIAGNOSTIC (lane-wedge): the bare message wedged a production engine
         // (fail_all -> failed_ -> 503 for every later request) with no pointer to the
         // offending call site. Report lane, expected and actual state so the next
@@ -1552,13 +1560,14 @@ private:
                              : active_[lane.value].occupied);
         if (!in_range || lanes_[lane.value] != expected || !owned) {
             std::fprintf(stderr,
-                         "[ninfer] require_lane refused: lane=%u expected=%d actual=%d "
+                         "[ninfer] require_lane refused at %s: lane=%u expected=%d actual=%d "
                          "occupied=%d\n",
-                         lane.value, static_cast<int>(expected), actual, owned ? 1 : 0);
-            throw std::logic_error("logical lane is not in the required state: lane=" +
-                                   std::to_string(lane.value) +
-                                   " expected=" + std::to_string(static_cast<int>(expected)) +
-                                   " actual=" + std::to_string(actual));
+                         site, lane.value, static_cast<int>(expected), actual, owned ? 1 : 0);
+            throw std::logic_error(
+                "logical lane is not in the required state: site=" + std::string(site) +
+                " lane=" + std::to_string(lane.value) +
+                " expected=" + std::to_string(static_cast<int>(expected)) +
+                " actual=" + std::to_string(actual));
         }
     }
 
