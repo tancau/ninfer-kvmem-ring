@@ -407,12 +407,23 @@ runtime::ContextTransactionReserveStatus ProgramImpl::reserve_active_capture_imp
         throw std::logic_error("capture transaction is not reservable");
     }
     if (cancellation.requested()) {
+        std::fprintf(stderr, "[ninfer] reserve skip: cancelled\n");
         skip_capture(std::move(offer));
         return runtime::ContextTransactionReserveStatus::Aborted;
     }
     const CaptureAssessment assessment = inspect_capture(
         offer, exact_shared, replacement, private_replacement, permit_shared_publication);
     if (!assessment.publishes_private && !assessment.publishes_shared) {
+        // LOCAL DIAGNOSTIC (reserve-trace): name the decline with its frontier and
+        // group kind so a silent no-bank run tells whether publish was refused.
+        const std::uint32_t lane = ContractAccess::lane(offer).value;
+        const RequestControl::Prefill& prefill = *requests[lane].prefill;
+        const CaptureGroup& group = prefill.capture_groups[prefill.next_capture];
+        std::fprintf(stderr,
+                     "[ninfer] reserve skip: publish declined (frontier=%u rewrite=%d "
+                     "shared=%d anchor=%d)\n",
+                     assessment.frontier, group.rewrite.has_value() ? 1 : 0,
+                     group.shared ? 1 : 0, group.long_anchor ? 1 : 0);
         skip_capture(std::move(offer));
         return runtime::ContextTransactionReserveStatus::Aborted;
     }
@@ -423,10 +434,14 @@ runtime::ContextTransactionReserveStatus ProgramImpl::reserve_active_capture_imp
          pressure_details->summary.prompt_tokens != assessment.frontier ||
          pressure_details->blocked_host_allocation_bytes != 0 ||
          !physical_peak_fits(pressure_details->demand.physical_peak_additional))) {
+        std::fprintf(stderr, "[ninfer] reserve skip: pressure (frontier=%u)\n",
+                     assessment.frontier);
         skip_capture(std::move(offer));
         return runtime::ContextTransactionReserveStatus::Aborted;
     }
     if (!pressure && !assessment.physically_feasible) {
+        std::fprintf(stderr, "[ninfer] reserve skip: infeasible (frontier=%u)\n",
+                     assessment.frontier);
         skip_capture(std::move(offer));
         return runtime::ContextTransactionReserveStatus::Aborted;
     }
