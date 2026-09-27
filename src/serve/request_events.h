@@ -7,8 +7,18 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace ninfer::serve {
+
+// LOCAL DIAGNOSTIC (reuse-fingerprint): FNV-1a hashes of the as-received prompt
+// sections, used to locate prefix-reuse misses (jittered tool schemas vs edited
+// history). Hashes only -- no prompt bytes ever reach the log.
+struct PromptFingerprint {
+    std::string tools;
+    std::string system;
+    std::vector<std::string> messages;
+};
 
 struct RequestLogContext {
     std::uint64_t id = 0;
@@ -27,6 +37,7 @@ struct RequestLogContext {
     std::optional<RequestedReasoningEffort> requested_reasoning_effort;
     std::optional<bool> preserve_thinking;
     bool preserve_thinking_semantic_change = false;
+    PromptFingerprint prompt_fingerprint;
     ninfer::ResolvedSamplingParameters sampling;
     double acquisition_seconds = 0.0;
     ninfer::PromptPreparationStats preparation;
@@ -101,7 +112,8 @@ struct ThroughputReport {
 RequestLogContext make_request_log_context(std::uint64_t id, std::string protocol,
                                            const GenerationRequest& request,
                                            const RequestLogMetadata& metadata,
-                                           const PreparedRequest& prepared);
+                                           const PreparedRequest& prepared,
+                                           PromptFingerprint prompt_fingerprint = {});
 RequestRejectionLogContext make_request_rejection_log_context(std::uint64_t id,
                                                               std::string protocol,
                                                               const GenerationRequest& request,

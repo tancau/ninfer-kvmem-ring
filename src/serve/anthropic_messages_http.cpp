@@ -2,10 +2,12 @@
 
 #include "serve/anthropic_messages.h"
 #include "serve/http_transport.h"
+#include "serve/request_json.h"
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <exception>
 #include <memory>
 #include <string>
@@ -13,6 +15,42 @@
 #include <vector>
 
 namespace ninfer::serve {
+
+namespace {
+
+// LOCAL DIAGNOSTIC (reuse-fingerprint): FNV-1a/64 over as-received JSON sections.
+// ordered_json preserves key order, so serializer jitter (e.g. reshuffled tool
+// schemas) changes the hash exactly when it would change the token stream.
+std::string fnv1a_hex(const std::string& bytes) {
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (unsigned char c : bytes) {
+        hash ^= c;
+        hash *= 1099511628211ULL;
+    }
+    char out[17];
+    std::snprintf(out, sizeof(out), "%016llx", static_cast<unsigned long long>(hash));
+    return std::string(out);
+}
+
+PromptFingerprint make_prompt_fingerprint(const RequestJson& body) {
+    PromptFingerprint fingerprint;
+    const auto tools = body.find("tools");
+    fingerprint.tools =
+        fnv1a_hex(tools == body.end() ? std::string("null") : tools->dump());
+    const auto system = body.find("system");
+    fingerprint.system =
+        fnv1a_hex(system == body.end() ? std::string("null") : system->dump());
+    const auto messages = body.find("messages");
+    if (messages != body.end() && messages->is_array()) {
+        fingerprint.messages.reserve(messages->size());
+        for (const auto& message : *messages) {
+            fingerprint.messages.push_back(fnv1a_hex(message.dump()));
+        }
+    }
+    return fingerprint;
+}
+
+} // namespace
 
 void HttpServer::handle_count_tokens(const httplib::Request& req, httplib::Response& res) {
     const std::string request_id = new_anthropic_request_id();
@@ -41,10 +79,13 @@ void HttpServer::handle_messages(const httplib::Request& req, httplib::Response&
     res.set_header("request-id", request_id);
 
     AnthropicMessagesRequest request;
+    PromptFingerprint prompt_fingerprint;
     try {
         RequestLimits limits;
         limits.default_max_tokens = options_.default_max_tokens;
-        request                   = parse_anthropic_messages_request(parse_json_body(req), limits);
+        const RequestJson body = parse_json_body(req);
+        request                = parse_anthropic_messages_request(body, limits);
+        prompt_fingerprint     = make_prompt_fingerprint(body);
     } catch (const ApiException& exception) {
         write_anthropic_error(res, exception.error(), request_id);
         return;
@@ -91,7 +132,8 @@ void HttpServer::handle_messages(const httplib::Request& req, httplib::Response&
     const int input_tokens = prepared.prompt_tokens;
 
     auto lifecycle = begin_request(make_request_log_context(
-        req_id, "anthropic_messages", request.generation, metadata, prepared));
+        req_id, "anthropic_messages", request.generation, metadata, prepared,
+        std::move(prompt_fingerprint)));
 
     if (!request.stream) {
         GenerationOutcome outcome;

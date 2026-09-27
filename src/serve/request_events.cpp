@@ -7,7 +7,8 @@ namespace ninfer::serve {
 RequestLogContext make_request_log_context(std::uint64_t id, std::string protocol,
                                            const GenerationRequest& request,
                                            const RequestLogMetadata& metadata,
-                                           const PreparedRequest& prepared) {
+                                           const PreparedRequest& prepared,
+                                           PromptFingerprint prompt_fingerprint) {
     RequestLogContext context;
     context.id                                 = id;
     context.protocol                           = std::move(protocol);
@@ -28,6 +29,7 @@ RequestLogContext make_request_log_context(std::uint64_t id, std::string protoco
                                   : std::nullopt;
     context.preserve_thinking                 = prepared.preserve_thinking;
     context.preserve_thinking_semantic_change = metadata.preserve_thinking_semantic_change;
+    context.prompt_fingerprint                = std::move(prompt_fingerprint);
     context.sampling                          = prepared.sampling;
     context.acquisition_seconds               = prepared.acquisition_seconds;
     context.preparation                       = prepared.preparation;

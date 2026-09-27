@@ -216,6 +216,14 @@ Json overrides_json(const ninfer::SamplingOverrides& overrides) {
 Json request_json(const RequestLogContext& context) {
     Json thinking_budget = nullptr;
     if (context.thinking_budget) { thinking_budget = *context.thinking_budget; }
+    Json fingerprint = nullptr;
+    if (!context.prompt_fingerprint.tools.empty() ||
+        !context.prompt_fingerprint.system.empty() ||
+        !context.prompt_fingerprint.messages.empty()) {
+        fingerprint = Json{{"tools", context.prompt_fingerprint.tools},
+                           {"system", context.prompt_fingerprint.system},
+                           {"messages", context.prompt_fingerprint.messages}};
+    }
     return Json{{"request_id", context.id},
                 {"protocol", context.protocol},
                 {"model", context.model},
@@ -235,6 +243,7 @@ Json request_json(const RequestLogContext& context) {
                 {"preserve_thinking",
                  context.preserve_thinking ? Json(*context.preserve_thinking) : Json(nullptr)},
                 {"preserve_thinking_semantic_change", context.preserve_thinking_semantic_change},
+                {"prompt_fingerprint", std::move(fingerprint)},
                 {"sampling", sampler_json(context.sampling)}};
 }
 
