@@ -565,10 +565,14 @@ PreparedContextCache prepare_context_cache(
                                 engine_order++);
             }
         }
-        // LOCAL (absolute grid anchors): message boundaries need strict serialization
-        // proof and are often nullopt exactly when turns are long (shared tool blocks,
-        // thinking). Absolute page-grid frontiers always exist; the next turn matches
-        // the longest stable one. 32K stride bounds the extra chunk splits (~8 max).
+    }
+    // LOCAL (absolute grid anchors): message boundaries need strict serialization
+    // proof and are often nullopt exactly when turns are long (shared tool blocks,
+    // thinking) - and single-message prompts have no message structure at all.
+    // Absolute page-grid frontiers always exist; the next turn matches the longest
+    // stable one. 32K stride bounds the extra chunk splits (~8 max). Gated to long
+    // prompts only, independent of message count.
+    if (full_prompt_frontier >= 32768) {
         for (std::uint32_t frontier = 32768; frontier < full_prompt_frontier;
              frontier += 32768) {
             add_opportunity(PromptCacheMarkerKind::PrivateLongAnchor,
