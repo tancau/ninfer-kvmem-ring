@@ -882,6 +882,12 @@ public:
                 }
             }
             if (!private_baseline.publishes_private || !private_baseline.physically_feasible) {
+                // LOCAL DIAGNOSTIC (reserve-trace): this manager-level fallback skip is
+                // silent (no program lines fire). Name it with feasibility.
+                std::fprintf(stderr,
+                             "[ninfer] reserve skip: manager-fallback (priv=%d feasible=%d)\n",
+                             private_baseline.publishes_private ? 1 : 0,
+                             private_baseline.physically_feasible ? 1 : 0);
                 program.skip_capture(std::move(offer));
                 return ActiveCaptureReserveResult::Skipped;
             }
@@ -900,6 +906,7 @@ public:
 
         if (selected->scenario.publication_slot == kInvalidCatalogSlot &&
             !selected->plan.pressure) {
+            std::fprintf(stderr, "[ninfer] reserve skip: selected-no-pressure\n");
             program.skip_capture(std::move(offer));
             return ActiveCaptureReserveResult::Skipped;
         }
