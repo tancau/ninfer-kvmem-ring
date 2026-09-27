@@ -556,6 +556,10 @@ runtime::ContextTransactionReserveStatus ProgramImpl::reserve_active_capture_imp
 
         transaction.transfer_enqueue_pending = assessment.needs_transfer;
         advance_resource_revision();
+        // LOCAL DIAGNOSTIC (capture-trace): every offer's fate must land in exactly
+        // one of reserved/abort/install; silent drops end here.
+        std::fprintf(stderr, "[ninfer] capture reserved: frontier=%u\n",
+                     transaction.group.frontier);
         context_transaction_.emplace<ActiveCaptureTransaction>(std::move(transaction));
         return runtime::ContextTransactionReserveStatus::Reserved;
     } catch (...) {
@@ -595,6 +599,7 @@ detail::PhysicalResources
 ProgramImpl::install_private_capture(SequenceState& sequence, const CaptureGroup& group,
                                      StateImageHandle checkpoint,
                                      std::optional<runtime::CheckpointRef> replacement) {
+    std::fprintf(stderr, "[ninfer] capture install: frontier=%u\n", group.frontier);
     detail::PhysicalResources removed;
     if (group.rewrite) {
         if (sequence.rewrite_state && *sequence.rewrite_state != checkpoint) {
@@ -812,6 +817,8 @@ void ProgramImpl::enqueue_active_capture_transfers(ActiveCaptureTransaction& tra
 }
 
 void ProgramImpl::abort_active_capture(ActiveCaptureTransaction& transaction) noexcept {
+    std::fprintf(stderr, "[ninfer] capture abort: lane=%u frontier=%u\n", transaction.lane,
+                 transaction.group.frontier);
     if (transaction.lane < max_concurrency &&
         active_continuations[transaction.lane] < continuation_capacity) {
         SequenceState& sequence = active_sequence(transaction.lane);
