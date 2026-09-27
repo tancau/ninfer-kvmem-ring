@@ -1100,6 +1100,23 @@ public:
         }
         for (std::size_t row = 0; row < lanes.size(); ++row) {
             const LaneId lane = lanes[row];
+            if (result.rows[row].disposition == CommitDisposition::CancelledReleased) {
+                // LOCAL FIX (cancel-flush): the cancel won the race mid-batch, so the
+                // lane is TerminalPending (abort pending/deferred) or already released
+                // by the cancel path. A blanket Active requirement wedges the engine
+                // here (fail_all -> 503 for every later request). Discard the orphaned
+                // result instead: release what is still pending, drop what is gone.
+                if (lane.value >= lane_count_) {
+                    throw std::logic_error("cancelled commit row lane is out of range");
+                }
+                if (lanes_[lane.value] == LogicalLaneState::TerminalPending) {
+                    release_cancelled_lane(lane);
+                } else if (lanes_[lane.value] != LogicalLaneState::Free ||
+                           active_[lane.value].occupied) {
+                    throw std::logic_error("cancelled commit row has an unexpected lane owner");
+                }
+                continue;
+            }
             require_lane(lane, LogicalLaneState::Active);
             switch (result.rows[row].disposition) {
             case CommitDisposition::Active:
