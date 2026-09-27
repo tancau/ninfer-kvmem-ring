@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <optional>
 #include <span>
@@ -1147,6 +1148,9 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
                             std::chrono::duration<double>(Clock::now() - started).count();
                         if (++next_capture_offer_id_ == 0) { ++next_capture_offer_id_; }
                         staged.pending_capture_offer = next_capture_offer_id_;
+                        // LOCAL DIAGNOSTIC (anchor-trace): offer fired mid-prefill.
+                        std::fprintf(stderr, "[ninfer] capture offer: frontier=%u\n",
+                                     *capture_frontier);
                         return runtime::PrefillStepResult{
                             .summary                 = summary,
                             .processed_prompt_tokens = processed_prompt_tokens,

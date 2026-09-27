@@ -565,6 +565,16 @@ PreparedContextCache prepare_context_cache(
                                 engine_order++);
             }
         }
+        // LOCAL (absolute grid anchors): message boundaries need strict serialization
+        // proof and are often nullopt exactly when turns are long (shared tool blocks,
+        // thinking). Absolute page-grid frontiers always exist; the next turn matches
+        // the longest stable one. 32K stride bounds the extra chunk splits (~8 max).
+        for (std::uint32_t frontier = 32768; frontier < full_prompt_frontier;
+             frontier += 32768) {
+            add_opportunity(PromptCacheMarkerKind::PrivateLongAnchor,
+                            SharedCandidateEvidence::EngineStructural, frontier,
+                            engine_order++);
+        }
     }
     if (hints.allow_engine_prefix_grid) {
         // Structural boundaries only expose a prefix where the prompt's own shape happens to put

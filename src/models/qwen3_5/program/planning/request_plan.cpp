@@ -4,6 +4,7 @@
 #include "models/qwen3_5/program/context.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <iterator>
 #include <limits>
 #include <stdexcept>
@@ -356,6 +357,19 @@ RequestBasePlan ProgramImpl::plan_request(const PreparedPromptData& prompt,
                       return std::tie(left.frontier, left.input_order) <
                              std::tie(right.frontier, right.input_order);
                   });
+        // LOCAL DIAGNOSTIC (anchor-trace): one line per request naming the bankable
+        // frontiers and their kinds. Zero groups here means the next turn can only
+        // match the full endpoint (or nothing), so a rewritten tail forces root.
+        std::fprintf(stderr, "[ninfer] capture groups: prompt=%u groups=%zu shared=%zu:",
+                     base->summary.prompt_tokens, base->capture_groups.size(),
+                     base->shared_candidates.size());
+        for (const CaptureGroup& group : base->capture_groups) {
+            std::fprintf(stderr, " %u%s%s%s", group.frontier,
+                         group.rewrite ? "(rewrite)" : "",
+                         group.shared ? "(shared)" : "",
+                         group.long_anchor ? "(anchor)" : "");
+        }
+        std::fprintf(stderr, "\n");
         std::sort(base->shared_candidates.begin(), base->shared_candidates.end(),
                   [](const CaptureGroup& left, const CaptureGroup& right) {
                       return std::tie(left.frontier, left.input_order) <
