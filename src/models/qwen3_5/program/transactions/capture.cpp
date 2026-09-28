@@ -294,6 +294,22 @@ ProgramImpl::inspect_capture(const CaptureOffer& offer, const SharedPrefixHandle
     assessment.needs_transfer = !assessment.transfer_requirements.empty();
     assessment.physically_feasible =
         physical_peak_fits(assessment.implementation->demand.physical_peak_additional);
+    // LOCAL DIAGNOSTIC (feasible-trace): device slots read free (DeviceFork) yet
+    // feasible is false. Print the state-slot arithmetic to see which side lies.
+    {
+        const std::uint32_t add_dstate =
+            assessment.implementation
+                ? assessment.implementation->demand.reservation_added.device.state_slots
+                : 0U;
+        const std::uint32_t hcap =
+            host_state_images != nullptr ? host_state_images->capacity() : 0U;
+        std::fprintf(stderr,
+                     "[ninfer] capture feasible: frontier=%u feasible=%d placement=%d "
+                     "add_dstate=%u occ_dstate=%u cap_dstate=%u hcap=%u\n",
+                     assessment.frontier, assessment.physically_feasible ? 1 : 0,
+                     static_cast<int>(assessment.state_placement), add_dstate,
+                     state_store->device_occupied(), state_store->device_capacity(), hcap);
+    }
     if (publish_shared) {
         std::vector<runtime::ContextTransferRequirement> recovery;
         recovery.reserve(3);
