@@ -294,21 +294,27 @@ ProgramImpl::inspect_capture(const CaptureOffer& offer, const SharedPrefixHandle
     assessment.needs_transfer = !assessment.transfer_requirements.empty();
     assessment.physically_feasible =
         physical_peak_fits(assessment.implementation->demand.physical_peak_additional);
-    // LOCAL DIAGNOSTIC (feasible-trace): device slots read free (DeviceFork) yet
-    // feasible is false. Print the state-slot arithmetic to see which side lies.
+    // LOCAL DIAGNOSTIC (feasible-trace): print the full peak/occupancy/capacity
+    // vectors. Placement and state slots alone cannot explain feasible=0, so
+    // dump every fits dimension in one line.
     {
-        const std::uint32_t add_dstate =
-            assessment.implementation
-                ? assessment.implementation->demand.reservation_added.device.state_slots
-                : 0U;
-        const std::uint32_t hcap =
-            host_state_images != nullptr ? host_state_images->capacity() : 0U;
+        const auto& peak = assessment.implementation->demand.physical_peak_additional;
+        const auto occ   = physical_occupancy();
+        const auto lim   = admission_capacity();
         std::fprintf(stderr,
-                     "[ninfer] capture feasible: frontier=%u feasible=%d placement=%d "
-                     "add_dstate=%u occ_dstate=%u cap_dstate=%u hcap=%u\n",
+                     "[ninfer] capture feasible: frontier=%u feasible=%d "
+                     "peak{lanes=%u,dstate=%u,hstate=%u,dmain=%u,dback=%u,hkb=%llu} "
+                     "occ{lanes=%u,dstate=%u,hstate=%u,dmain=%u,dback=%u,hkb=%llu} "
+                     "lim{lanes=%u,dstate=%u,hstate=%u,dmain=%u,dback=%u,hkb=%llu}\n",
                      assessment.frontier, assessment.physically_feasible ? 1 : 0,
-                     static_cast<int>(assessment.state_placement), add_dstate,
-                     state_store->device_occupied(), state_store->device_capacity(), hcap);
+                     peak.device.active_lanes, peak.device.state_slots,
+                     peak.host.state_slots, peak.device.main_kv_pages,
+                     peak.device.backend_kv_pages, (unsigned long long)peak.host.kv_bytes,
+                     occ.device.active_lanes, occ.device.state_slots, occ.host.state_slots,
+                     occ.device.main_kv_pages, occ.device.backend_kv_pages,
+                     (unsigned long long)occ.host.kv_bytes, lim.device.active_lanes,
+                     lim.device.state_slots, lim.host.state_slots, lim.device.main_kv_pages,
+                     lim.device.backend_kv_pages, (unsigned long long)lim.host.kv_bytes);
     }
     if (publish_shared) {
         std::vector<runtime::ContextTransferRequirement> recovery;
