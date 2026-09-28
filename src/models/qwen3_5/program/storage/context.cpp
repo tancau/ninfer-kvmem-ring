@@ -1898,19 +1898,29 @@ void ProgramImpl::commit_sequence_kv(SequenceState& sequence, std::uint32_t main
         throw std::logic_error("KV commit request is outside the sequence bundle");
     }
     // LOCAL DIAGNOSTIC (commit-skew tripwire): a production long session failed with
-    // "KV committed frontier is invalid: frontier=94465 committed=94464" (under-mapping:
-    // commit one token past mapped pages, no reproduction yet). Name the sequence
-    // accounting at the throw so the next recurrence identifies the skew source
-    // (e.g. text_kv_valid past ledger => forced/commit path; cursor past mapping =>
-    // prefill pairing). Behaviour unchanged: commit_frontier still throws.
-    if (text_kv_addresses &&
-        kv_pages_for_frontier(main_tokens) >
-            text_kv_addresses->mapped_pages(sequence.kv->text)) {
-        std::fprintf(stderr,
-                     "[ninfer] kv commit under-mapped: frontier=%u mapped_pages=%u "
-                     "ledger=%zu exec=%u kvvalid=%u\n",
-                     main_tokens, text_kv_addresses->mapped_pages(sequence.kv->text),
-                     sequence.ledger.size(), sequence.execution_frontier, sequence.text_kv_valid);
+    // "KV committed frontier is invalid: frontier=117761 committed=117760 mapped=1840"
+    // while reusing a device-resident endpoint at a page+1 frontier. The text-only
+    // check never fired, so the skew is on the speculative backend. Name BOTH spaces
+    // and which one is short, with the sequence accounting. Behaviour unchanged.
+    if (text_kv_addresses) {
+        const std::uint32_t text_mapped = text_kv_addresses->mapped_pages(sequence.kv->text);
+        const std::uint32_t text_need   = kv_pages_for_frontier(main_tokens);
+        std::uint32_t backend_mapped = 0, backend_need = 0, backend_valid = 0;
+        if (sequence.kv->backend) {
+            backend_mapped = backend_kv_addresses->mapped_pages(*sequence.kv->backend);
+            backend_need   = kv_pages_for_frontier(backend_tokens);
+            backend_valid  = backend_kv_valid(sequence);
+        }
+        if (text_need > text_mapped || (sequence.kv->backend && backend_need > backend_mapped)) {
+            std::fprintf(stderr,
+                         "[ninfer] kv commit under-mapped: which=%s text{frontier=%u need=%u "
+                         "mapped=%u} backend{frontier=%u need=%u mapped=%u valid=%u} "
+                         "ledger=%zu exec=%u textvalid=%u\n",
+                         (text_need > text_mapped) ? "text" : "backend", main_tokens, text_need,
+                         text_mapped, backend_tokens, backend_need, backend_mapped, backend_valid,
+                         sequence.ledger.size(), sequence.execution_frontier,
+                         sequence.text_kv_valid);
+        }
     }
     text_kv_addresses->commit_frontier(sequence.kv->text, main_tokens);
     if (sequence.kv->backend) {

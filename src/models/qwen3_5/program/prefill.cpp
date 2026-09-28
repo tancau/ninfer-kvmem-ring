@@ -1031,6 +1031,15 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
                 staged.cursor >= staged.prompt_tokens) {
                 throw std::logic_error("staged MTP bridge is outside the reusable suffix");
             }
+            // LOCAL FIX (mtp-bridge mapping): the bridge writes its draft KV at
+            // position base-1 and then publishes mtp_kv_valid = base. On a reused
+            // prefix the backend mapping is inherited from the source checkpoint,
+            // whose backend frontier is base-1: exactly base-1 tokens. When base-1
+            // is a page boundary (base % 64 == 1) the bridge token lands one page
+            // past the mapped range and the commit throws "KV committed frontier is
+            // invalid" (observed at 94465 and 117761, both %64==1). Extend the
+            // mapping to the bridge frontier BEFORE the bridge writes.
+            ensure_sequence_kv_mapped(sequence, staged.base, staged.base);
             mark_workspace_usage(workspace_plan.mtp_prefill);
             const Tensor& previous_hidden = sequence.tail_hidden;
             const execution::MtpBridgeInput bridge{
@@ -1195,6 +1204,11 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
                 if (staged.mtp_bridge != MtpBridgeMode::AfterExactHit) {
                     throw std::logic_error("zero-suffix MTP reuse has no exact-hit bridge");
                 }
+                // LOCAL FIX (mtp-bridge mapping): same page-boundary skew as the
+                // BeforeSuffix bridge -- the bridge publishes mtp_kv_valid =
+                // prompt_tokens while the inherited backend mapping stops at
+                // prompt_tokens-1. Extend it first when the frontier is page+1.
+                ensure_sequence_kv_mapped(sequence, staged.prompt_tokens, staged.prompt_tokens);
                 mark_workspace_usage(workspace_plan.mtp_prefill);
                 const auto bridge_rope =
                     prompt_rope_position(staged.prompt, staged.prompt_tokens - 1);
