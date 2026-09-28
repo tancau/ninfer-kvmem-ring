@@ -981,6 +981,16 @@ std::optional<AdmissionCandidate> ProgramImpl::inspect_lane(
                     static_cast<std::uint64_t>(required) + active_pages;
                 const std::uint32_t capacity = pages.physical_pool().usable_pages();
                 if (final_without_release <= capacity) { return true; }
+                // LOCAL FIX (macro-pressure defer): over by more than one page, tail
+                // staging (which releases a single page) cannot help by construction;
+                // only pressure-planner victims can. Refusing here short-circuits the
+                // planner for exactly the macro-pressure reuses that need it, so every
+                // long turn falls back to root. Defer: the planner drops infeasible
+                // candidates silently, and materialization throws loudly on corruption,
+                // so an unresolvable case still ends as root, never as a wedge.
+                if (final_without_release > static_cast<std::uint64_t>(capacity) + 1U) {
+                    return true;
+                }
                 if (!prefix_fork || frontier == 0 ||
                     frontier % static_cast<std::uint32_t>(kPagedKVPageSize) == 0 ||
                     final_without_release != static_cast<std::uint64_t>(capacity) + 1U ||
