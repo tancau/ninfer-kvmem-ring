@@ -473,11 +473,16 @@ detail::PhysicalResources ProgramImpl::physical_occupancy() const noexcept {
     }
     if (text_kv_pages) {
         const DeviceKVPagePool& pool = text_kv_pages->physical_pool();
-        out.device.main_kv_pages     = pool.allocated_pages() + pool.reserved_pages();
+        // LOCAL FIX (ring physical occupancy): under a logical reservation the reserved
+        // count is a promise the ring satisfies by demotion on demand, not memory already
+        // held. Counting it made the Device look permanently oversubscribed
+        // (allocated 1500 + reserved 938 = 2438 over a 1500-page pool) and drove the
+        // capture/materialization paths into a state they could not fund.
+        out.device.main_kv_pages = pool.allocated_pages();
     }
     if (backend_kv_pages) {
         const DeviceKVPagePool& pool = backend_kv_pages->physical_pool();
-        out.device.backend_kv_pages  = pool.allocated_pages() + pool.reserved_pages();
+        out.device.backend_kv_pages = pool.allocated_pages();
     }
     if (host_kv_arena) { out.host.kv_bytes = host_kv_arena->occupied_bytes(); }
     return out;
