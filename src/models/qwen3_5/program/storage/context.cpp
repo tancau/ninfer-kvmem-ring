@@ -1647,6 +1647,16 @@ std::uint32_t ProgramImpl::demote_other_addresses_to_host(KVAddressSpaceStore& a
         }
     });
     (void)flush();
+    // LOCAL DIAGNOSTIC (demote-counters): when inactive addresses cannot cover the
+    // deficit the live lane cannibalizes its own bankable head, so a bank-miss
+    // needs to know WHY the dead residents would not drain. Name the blocker.
+    if (freed < target_free) {
+        std::fprintf(stderr,
+                     "[ninfer] demote-other short: freed=%u want=%u slots=%u invalid=%u "
+                     "noresident=%u pins=%u stalehost=%u\n",
+                     freed, target_free, slots_visited, skip_invalid, skip_noresident,
+                     skip_pins, skip_stalehost);
+    }
     return freed;
 }
 
