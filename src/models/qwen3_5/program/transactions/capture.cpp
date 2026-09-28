@@ -103,6 +103,12 @@ ProgramImpl::inspect_capture(const CaptureOffer& offer, const SharedPrefixHandle
             demoted = true;
         }
         if (demoted) {
+            // LOCAL DIAGNOSTIC (publish-decline): name which frontier lost its
+            // publish to host demotion, so a bank-miss names its gate.
+            std::fprintf(stderr,
+                         "[ninfer] publish declined: frontier=%u private=%d shared=%d "
+                         "(host-demoted pages inside range)\n",
+                         group.frontier, publish_private ? 1 : 0, publish_shared ? 1 : 0);
             publish_private = false;
             publish_shared  = false;
         }

@@ -833,10 +833,18 @@ AbortResult ProgramImpl::abort(SequenceHandle sequence) noexcept {
     // publishes them as an endpoint-less catalogued continuation instead of dropping
     // them with the lane. An identical retry then reuses the anchors. When there is
     // nothing salvageable this returns false and the plain abort path below runs.
-    if (salvage_aborted_anchors(state, request, lane, continuation_index, out)) {
-        std::fprintf(stderr, "[ninfer] abort salvaged: lane %u anchors=%zu\n", lane,
-                     out.summary.long_anchors.size());
-        return out;
+    // LOCAL DIAGNOSTIC (salvage-skip): an abort WITH banked anchors that still falls
+    // through names its failing stage, so a starved retry points at the gate.
+    if (!state.long_anchors.empty()) {
+        if (salvage_aborted_anchors(state, request, lane, continuation_index, out)) {
+            std::fprintf(stderr, "[ninfer] abort salvaged: lane %u anchors=%zu\n", lane,
+                         out.summary.long_anchors.size());
+            return out;
+        }
+        std::fprintf(stderr,
+                     "[ninfer] abort salvage skipped: lane %u anchors=%zu ledger=%zu kv=%d\n",
+                     lane, state.long_anchors.size(), state.ledger.size(),
+                     state.kv.has_value() ? 1 : 0);
     }
     if (!clear_lane_strict(state, request)) {
         // LOCAL DIAGNOSTIC (teardown-blockers): kv_releasable=0 alone cannot tell pins
