@@ -349,6 +349,14 @@ public:
                     const CatalogEntry& entry = catalog_[index.slot];
                     if (entry.state != CatalogState::Catalogued || !entry.handle ||
                         private_has_active_edge(index.slot)) {
+                        // LOCAL DIAGNOSTIC (match-trace): matched but dropped before
+                        // planning. Name the gate.
+                        std::fprintf(stderr,
+                                     "[ninfer] match drop: frontier=%u state=%d handle=%d edge=%d\n",
+                                     index.key.frontier,
+                                     static_cast<int>(entry.state),
+                                     entry.handle ? 1 : 0,
+                                     private_has_active_edge(index.slot) ? 1 : 0);
                         continue;
                     }
                     const bool retain =
@@ -358,7 +366,12 @@ public:
                     std::optional<AdmissionCandidate> plan =
                         program.inspect_admission(prompt, base, *destination, &*entry.handle,
                                                   nullptr, index.checkpoint, retain);
-                    if (!plan) { continue; }
+                    if (!plan) {
+                        // LOCAL DIAGNOSTIC (match-trace): program refused the source.
+                        std::fprintf(stderr, "[ninfer] match drop: program-refused frontier=%u\n",
+                                     index.key.frontier);
+                        continue;
+                    }
                     if (plan->summary().reusable_prompt_tokens == 0 ||
                         (retain &&
                          plan->identity_assessment().source_mode != PrivateSourceMode::Retain)) {
