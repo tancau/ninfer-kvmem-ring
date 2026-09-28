@@ -310,7 +310,12 @@ public:
         }
 
         std::optional<DeviceKVPageHandle> physical_predecessor;
-        if (preferred_predecessor) { physical_predecessor = physical(*preferred_predecessor); }
+        // LOCAL FIX (ring predecessor): the predecessor is only a contiguity hint for the
+        // allocator. Under the ring it can have been demoted to the Host (no Device
+        // replica), which must fall back to an unconstrained allocation, not throw.
+        if (preferred_predecessor && device_resident(*preferred_predecessor)) {
+            physical_predecessor = physical(*preferred_predecessor, "map-predecessor");
+        }
         materialization_scratch_.clear();
         physical_->materialize(reservation, static_cast<std::uint32_t>(destinations.size()),
                                materialization_scratch_, physical_predecessor);
@@ -391,17 +396,18 @@ public:
         return handle.index_;
     }
 
-    [[nodiscard]] DeviceKVPageHandle physical(LogicalKVPageHandle handle) const {
+    [[nodiscard]] DeviceKVPageHandle physical(LogicalKVPageHandle handle,
+                                              const char* tag = "?") const {
         const Page& page = require(handle);
         if (!page.device_replica) {
-            // LOCAL DIAGNOSTIC (missing-replica): name the page state so a ring-demote
-            // race (pinned-but-demoted, or a host-only read) is visible.
+            // LOCAL DIAGNOSTIC (missing-replica): name the call site and page state so a
+            // ring-demote race is pinned to one operation.
             std::fprintf(stderr,
-                         "[ninfer] physical() missing replica: idx=%u host=%d pins=%u refs=%u "
+                         "[ninfer] physical(%s) missing replica: idx=%u host=%d pins=%u refs=%u "
                          "active=%u writers=%u occupied=%d\n",
-                         handle.index_, page.host_replica.has_value() ? 1 : 0, page.source_pins,
-                         page.references, page.active_references, page.writer_references,
-                         page.occupied ? 1 : 0);
+                         tag, handle.index_, page.host_replica.has_value() ? 1 : 0,
+                         page.source_pins, page.references, page.active_references,
+                         page.writer_references, page.occupied ? 1 : 0);
             throw std::logic_error("logical KV page has no Device replica");
         }
         return page.device_replica->handle();
@@ -1100,7 +1106,7 @@ public:
             throw std::logic_error("page-aligned KV prefix fork has no tail source");
         }
         const Address& source = require(fork.source_);
-        return pages_->physical(membership(source, fork.full_pages_));
+        return pages_->physical(membership(source, fork.full_pages_), "fork-tail-src");
     }
 
     [[nodiscard]] DeviceKVPageHandle
@@ -1109,7 +1115,7 @@ public:
         if (!fork.tail_destination_) {
             throw std::logic_error("page-aligned KV prefix fork has no tail destination");
         }
-        return pages_->physical(*fork.tail_destination_);
+        return pages_->physical(*fork.tail_destination_, "fork-tail-dst");
     }
 
     [[nodiscard]] LogicalKVPageHandle
@@ -1182,10 +1188,10 @@ public:
 
         publish_scratch_.clear();
         for (std::uint32_t page = 0; page < fork.full_pages_; ++page) {
-            publish_scratch_.push_back(pages_->physical(membership(source, page)));
+            publish_scratch_.push_back(pages_->physical(membership(source, page), "fork-pub-src"));
         }
         if (fork.tail_destination_) {
-            publish_scratch_.push_back(pages_->physical(*fork.tail_destination_));
+            publish_scratch_.push_back(pages_->physical(*fork.tail_destination_, "fork-pub-dst"));
         }
         tables_->publish(fork.row_->handle(), 0, publish_scratch_, stream);
 
@@ -1337,7 +1343,7 @@ public:
             throw std::logic_error("page-aligned active KV snapshot has no tail source");
         }
         const Address& source = require(snapshot.source_);
-        return pages_->physical(membership(source, snapshot.shape_.full_pages));
+        return pages_->physical(membership(source, snapshot.shape_.full_pages), "snap-tail-src");
     }
 
     [[nodiscard]] DeviceKVPageHandle
@@ -1346,7 +1352,7 @@ public:
         if (!snapshot.tail_destination_) {
             throw std::logic_error("page-aligned active KV snapshot has no tail destination");
         }
-        return pages_->physical(*snapshot.tail_destination_);
+        return pages_->physical(*snapshot.tail_destination_, "snap-tail-dst");
     }
 
     void commit_active_snapshot(KVActiveSnapshotReservation&& snapshot,
@@ -1379,10 +1385,10 @@ public:
 
         publish_scratch_.clear();
         for (std::uint32_t page = 0; page < snapshot.shape_.full_pages; ++page) {
-            publish_scratch_.push_back(pages_->physical(membership(source, page)));
+            publish_scratch_.push_back(pages_->physical(membership(source, page), "snap-pub-src"));
         }
         if (snapshot.tail_destination_) {
-            publish_scratch_.push_back(pages_->physical(*snapshot.tail_destination_));
+            publish_scratch_.push_back(pages_->physical(*snapshot.tail_destination_, "snap-pub-dst"));
         }
         tables_->publish(source.row->handle(), 0, publish_scratch_, stream);
 
@@ -1489,7 +1495,7 @@ public:
         pages_->publish_device_replica(logical);
         pages_->retain_active_reference(logical);
         publish_scratch_.clear();
-        publish_scratch_.push_back(pages_->physical(logical));
+        publish_scratch_.push_back(pages_->physical(logical, "restore-src"));
         tables_->publish(address.row->handle(), page, publish_scratch_, stream);
         return true;
     }
@@ -1521,7 +1527,7 @@ public:
         try {
             publish_scratch_.clear();
             for (const LogicalKVPageHandle page : added) {
-                publish_scratch_.push_back(pages_->physical(page));
+                publish_scratch_.push_back(pages_->physical(page, "map-pub"));
             }
             tables_->publish(address.row->handle(), begin, publish_scratch_, stream);
         } catch (...) {
@@ -1730,7 +1736,7 @@ public:
         if (logical_page >= address.page_count) {
             throw std::out_of_range("KV logical page is outside the address space");
         }
-        return pages_->physical(membership(address, logical_page));
+        return pages_->physical(membership(address, logical_page), "addr-src");
     }
 
     [[nodiscard]] std::uint64_t content_epoch(KVAddressSpaceHandle handle,
@@ -1915,7 +1921,7 @@ private:
         if (!address.row) { throw std::logic_error("KV address space has no execution row"); }
         publish_scratch_.clear();
         for (std::uint32_t page = 0; page < address.page_count; ++page) {
-            publish_scratch_.push_back(pages_->physical(membership(address, page)));
+            publish_scratch_.push_back(pages_->physical(membership(address, page), "addr-pub"));
         }
         tables_->publish(address.row->handle(), 0, publish_scratch_, stream);
     }

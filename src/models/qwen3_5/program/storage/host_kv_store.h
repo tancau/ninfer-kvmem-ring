@@ -160,7 +160,7 @@ public:
         std::uint32_t node = extent.head;
         for (std::size_t index = 0; index < out.size(); ++index) {
             if (node == kInvalidIndex) { std::terminate(); }
-            out[index] = extent.page_store->physical(memberships_[node].page);
+            out[index] = extent.page_store->physical(memberships_[node].page, "host-extent");
             node       = memberships_[node].next;
         }
         if (node != kInvalidIndex) { std::terminate(); }

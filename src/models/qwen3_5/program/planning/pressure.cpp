@@ -73,7 +73,7 @@ std::uint32_t physical_kv_runs(const KVAddressSpaceStore& addresses,
     std::vector<DeviceKVPageHandle> physical;
     physical.reserve(count);
     for (std::uint32_t offset = 0; offset < count; ++offset) {
-        physical.push_back(pages.physical(addresses.logical_page(address, begin + offset)));
+        physical.push_back(pages.physical(addresses.logical_page(address, begin + offset), "pressure-src"));
     }
     return pages.physical_pool().contiguous_run_count(physical);
 }
