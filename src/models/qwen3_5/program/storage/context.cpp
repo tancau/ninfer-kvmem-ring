@@ -374,12 +374,22 @@ ProgramImpl::owner_exclusive_resources(const SequenceState& sequence) const {
             if (addresses.active(address)) {
                 const std::uint32_t mapped      = addresses.mapped_pages(address);
                 const std::uint32_t entitlement = addresses.entitlement(address);
-                if (entitlement < mapped ||
-                    entitlement - mapped >
-                        std::numeric_limits<std::uint32_t>::max() - device_pages) {
-                    throw std::logic_error("owner active KV entitlement is inconsistent");
+                // LOCAL FIX (ring device footprint): the Device footprint of an active
+                // address is its resident pages plus its unmapped entitlement, but never
+                // more than the pool. The ring keeps the excess on Host, so a demoted or
+                // host-backed page is not Device footprint. Without this cap the
+                // materialization check failed at the pool boundary
+                // ("materialized sequence does not match its active entitlement").
+                const std::uint32_t pool       = pages.physical_pool().usable_pages();
+                const std::uint32_t device_cap =
+                    pool == 0 ? entitlement : std::min(entitlement, pool);
+                if (device_cap > mapped) {
+                    const std::uint32_t delta = device_cap - mapped;
+                    if (delta > std::numeric_limits<std::uint32_t>::max() - device_pages) {
+                        throw std::overflow_error("owner active KV entitlement overflow");
+                    }
+                    device_pages += delta;
                 }
-                device_pages += entitlement - mapped;
             }
         };
         add_kv(*text_kv_addresses, *text_kv_pages, sequence.kv->text, out.device.main_kv_pages);

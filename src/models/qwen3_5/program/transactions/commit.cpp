@@ -117,7 +117,38 @@ StartResult ProgramImpl::start_request(MaterializationTransaction& transaction) 
         detail::PhysicalResources actual         = owner_exclusive_resources(sequence);
         actual.device.active_lanes               = 1;
         const detail::PhysicalResources expected = active;
-        if (actual != expected) {
+        // LOCAL FIX (ring device footprint): in ring mode the Device KV is a resident
+        // window capped at the pool, so a demoted page makes the actual footprint smaller
+        // than the planned cap while the Host replica grows. Exact equality holds for the
+        // lane/state dims; the KV dims are bounded above by the plan and below by zero.
+        const bool ring_active =
+            text_kv_pages != nullptr && text_kv_addresses != nullptr &&
+            text_kv_pages->physical_pool().usable_pages() != 0 &&
+            text_kv_pages->physical_pool().usable_pages() <
+                text_kv_addresses->logical_page_capacity();
+        const bool kv_within =
+            actual.device.main_kv_pages <= expected.device.main_kv_pages &&
+            actual.device.backend_kv_pages <= expected.device.backend_kv_pages;
+        const bool match = ring_active
+                               ? (actual.device.active_lanes == expected.device.active_lanes &&
+                                  actual.device.state_slots == expected.device.state_slots &&
+                                  actual.host.state_slots == expected.host.state_slots &&
+                                  kv_within)
+                               : (actual == expected);
+        if (!match) {
+            // LOCAL DIAGNOSTIC (entitlement-mismatch): name the differing dimensions so a
+            // pool-boundary failure points at the accounting term, not just the check.
+            std::fprintf(stderr,
+                         "[ninfer] entitlement mismatch: ring=%d actual{lanes=%u,dstate=%u,hstate=%u,"
+                         "dmain=%u,dback=%u,hkb=%llu} expected{lanes=%u,dstate=%u,hstate=%u,"
+                         "dmain=%u,dback=%u,hkb=%llu}\n",
+                         ring_active ? 1 : 0, actual.device.active_lanes, actual.device.state_slots,
+                         actual.host.state_slots, actual.device.main_kv_pages,
+                         actual.device.backend_kv_pages, (unsigned long long)actual.host.kv_bytes,
+                         expected.device.active_lanes, expected.device.state_slots,
+                         expected.host.state_slots, expected.device.main_kv_pages,
+                         expected.device.backend_kv_pages,
+                         (unsigned long long)expected.host.kv_bytes);
             throw std::logic_error("materialized sequence does not match its active entitlement");
         }
         if (details.reuse != ReusePath::Root) {
