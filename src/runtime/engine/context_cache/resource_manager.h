@@ -2320,6 +2320,22 @@ private:
                                        return input.id == planned->candidate;
                                    })
                     : candidate_inputs.end();
+        // LOCAL DIAGNOSTIC (value-trace): a root verdict with matched anchors must
+        // show the reusable tokens per candidate and who won, to separate a value
+        // loss (anchors evaluated, root cheaper) from an evaluation gap.
+        for (std::size_t index = 0; index < candidates.size(); ++index) {
+            const std::uint32_t reusable =
+                candidates[index].plan
+                    ? candidates[index].plan->summary().reusable_prompt_tokens
+                    : 0U;
+            std::fprintf(stderr,
+                         "[ninfer] plan candidate: idx=%zu reusable=%u%s\n", index, reusable,
+                         (selected_candidate != candidate_inputs.end() &&
+                          static_cast<std::size_t>(selected_candidate -
+                                                   candidate_inputs.begin()) == index)
+                             ? " WINNER"
+                             : "");
+        }
         if (!planned || !planned->plan || selected_candidate == candidate_inputs.end()) {
             return std::nullopt;
         }
