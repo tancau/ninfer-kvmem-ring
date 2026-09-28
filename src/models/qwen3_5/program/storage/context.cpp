@@ -523,11 +523,13 @@ bool ProgramImpl::physical_peak_fits(detail::PhysicalResources peak) const noexc
     // to the pool does not work either: the check is `used + added <= capacity`, so clamping
     // `added` to `capacity` forces `used == 0` and rejects every request once the pool holds
     // anything. Skip the dimension instead.
+    // LOCAL FIX (ring-fits-used): zeroing only `added` is not enough: `used` itself is the
+    // logical mapped count, legitimately above pool capacity by design (1660 mapped vs 1500
+    // pool observed), so `used <= capacity` fails every capture past the pool even with
+    // zero added. Skip the whole dimension as the comment intends, not just the added term.
     const bool ring = text_kv_pages != nullptr && text_kv_addresses != nullptr &&
                       text_kv_pages->physical_pool().usable_pages() <
                           text_kv_addresses->logical_page_capacity();
-    if (ring) { peak.device.main_kv_pages = 0; }
-    if (ring) { peak.device.backend_kv_pages = 0; }
     const auto fits_u32 = [](std::uint32_t used, std::uint32_t added, std::uint32_t capacity) {
         return added <= capacity && used <= capacity - added;
     };
@@ -539,10 +541,10 @@ bool ProgramImpl::physical_peak_fits(detail::PhysicalResources peak) const noexc
                  limits.device.active_lanes) &&
         fits_u32(occupied.device.state_slots, peak.device.state_slots,
                  limits.device.state_slots) &&
-        fits_u32(occupied.device.main_kv_pages, peak.device.main_kv_pages,
-                 limits.device.main_kv_pages) &&
-        fits_u32(occupied.device.backend_kv_pages, peak.device.backend_kv_pages,
-                 limits.device.backend_kv_pages) &&
+        (ring || fits_u32(occupied.device.main_kv_pages, peak.device.main_kv_pages,
+                          limits.device.main_kv_pages)) &&
+        (ring || fits_u32(occupied.device.backend_kv_pages, peak.device.backend_kv_pages,
+                          limits.device.backend_kv_pages)) &&
         fits_u32(occupied.host.state_slots, peak.host.state_slots, limits.host.state_slots) &&
         fits_size(occupied.host.kv_bytes, peak.host.kv_bytes, limits.host.kv_bytes);
     if (!ok) {
