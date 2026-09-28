@@ -784,24 +784,6 @@ bool ProgramImpl::salvage_aborted_anchors(SequenceState& state, RequestControl& 
         state.state = {};
         state.endpoint_valid = false;
         refresh_state_views(state);
-        // LOCAL FIX (salvage-trim): the aborted lane's whole KV bundle would stay
-        // resident (observed: a salvaged ~110K bundle plus the next live turn doubles
-        // pool occupancy, the live head gets demoted, its anchors decline). Trim to
-        // the longest banked anchor: the tail is recomputed on reuse. Backend is
-        // small and left whole. Any trim failure keeps the untrimmed bundle (still
-        // correct, just fatter); validity markers only move on success, so they can
-        // never over-claim mapping.
-        try {
-            std::uint32_t keep = 0;
-            for (const LongAnchorCheckpoint& anchor : state.long_anchors) {
-                keep = std::max(keep, anchor.frontier);
-            }
-            if (keep != 0 && keep < state.text_kv_valid) {
-                trim_sequence_kv(state, keep, 0);
-                state.text_kv_valid = keep;
-            }
-        } catch (...) {
-        }
         unbind_sequence_kv(state);
         request.prefill.reset();
         request.lifecycle            = Lifecycle::Empty;
