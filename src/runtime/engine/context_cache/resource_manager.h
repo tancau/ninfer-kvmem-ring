@@ -1141,6 +1141,50 @@ public:
             // permanent refusal is unchanged except the caller caps the retries.
             return result;
         }
+        // LOCAL FIX (salvage-on-cancel): the aborted turn banked long anchors before the
+        // cancel arrived. Publish them as an endpoint-less catalogued continuation (same
+        // ownership transfer as the finish path) instead of dropping them with the lane,
+        // so an identical retry reuses the anchors. Without salvage the old clear path
+        // below runs unchanged.
+        if (result.salvaged && result.continuation &&
+            valid_continuation_summary(result.summary)) {
+            CatalogEntry& publication = catalog_.at(active_[lane.value].publication_slot);
+            if (publication.state == CatalogState::ReservedForActive &&
+                publication.id == active_[lane.value].continuation_id) {
+                ActiveEntry& active = active_[lane.value];
+                release_active_references(lane);
+                publication.state = CatalogState::Catalogued;
+                assign_continuation_summary(publication.summary, result.summary);
+                publication.handle.emplace(std::move(*result.continuation));
+                result.continuation.reset();
+                publication.session           = active.session;
+                publication.retention         = active.retention;
+                publication.publication_order = active.publication_order;
+                migrate_observations(publication, result.summary, active.retention);
+                advance_revision(publication.revision);
+                if (publication.session && active.update_session_index) {
+                    if (!publish_session(*publication.session, active.publication_slot,
+                                         publication.id, publication.revision,
+                                         active.publication_order)) {
+                        publication.session.reset();
+                        publication.retention = RetentionClass::RecentPrivate;
+                    }
+                }
+                std::fprintf(stderr, "[ninfer] abort salvaged: slot=%u anchors=%zu\n",
+                             active.publication_slot, publication.summary.long_anchors.size());
+                reset_active_entry(active_[lane.value]);
+                lanes_[lane.value] = LogicalLaneState::Free;
+                return result;
+            }
+            // Reservation state unexpected: fall through to the plain clear path rather
+            // than cataloguing under a mismatched slot. The salvaged handle is released
+            // below with the entry.
+            if (result.continuation) {
+                (void)program.release_continuation(std::move(*result.continuation));
+                result.continuation.reset();
+            }
+            result.salvaged = false;
+        }
         release_active_references(lane);
         clear_catalog_entry(catalog_.at(active_[lane.value].publication_slot));
         reset_active_entry(active_[lane.value]);

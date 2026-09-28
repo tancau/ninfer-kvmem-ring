@@ -549,6 +549,13 @@ public:
     [[nodiscard]] DiscardResult abort_pending(PendingBatch&& pending) noexcept;
     [[nodiscard]] FinishResult finish(SequenceHandle sequence) noexcept;
     [[nodiscard]] AbortResult abort(SequenceHandle sequence) noexcept;
+    // LOCAL FIX (salvage-on-cancel): attempt to publish the aborted lane's banked long
+    // anchors as an endpoint-less catalogued continuation. Returns true and fills `out`
+    // (Consumed + salvaged) on success; returns false leaving `out` untouched when there
+    // is nothing salvageable, so the caller falls back to the plain abort path.
+    [[nodiscard]] bool salvage_aborted_anchors(SequenceState& state, RequestControl& request,
+                                               std::uint32_t lane, std::uint32_t continuation_index,
+                                               AbortResult& out) noexcept;
     [[nodiscard]] ReleaseResult release_continuation(ContinuationHandle&& continuation) noexcept;
     [[nodiscard]] ReleaseResult release_shared_prefix(SharedPrefixHandle&& shared) noexcept;
     void fail_all_cleanup() noexcept;

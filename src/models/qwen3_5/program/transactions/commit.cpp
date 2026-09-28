@@ -666,6 +666,147 @@ FinishResult ProgramImpl::finish(SequenceHandle sequence) noexcept {
     return out;
 }
 
+// LOCAL FIX (salvage-on-cancel): publish the aborted lane's banked long anchors as an
+// endpoint-less catalogued continuation. This mirrors the finish path's ownership
+// transfer (KV deactivated-not-released, anchor checkpoint refs retained) minus the
+// endpoint publication, and mirrors release_active_sequence_state_strict for the active
+// binding EXCEPT anchor checkpoint references are kept, not released. Read-only
+// validation runs before any mutation, so a false return leaves the lane untouched for
+// the plain abort path. Any mutation-phase inconsistency terminates, matching the
+// strict teardown it replaces (loud, never silent corruption).
+bool ProgramImpl::salvage_aborted_anchors(SequenceState& state, RequestControl& request,
+                                           std::uint32_t lane, std::uint32_t continuation_index,
+                                           AbortResult& out) noexcept {
+    try {
+        if (state.long_anchors.empty() || !state.kv || !state_store || !text_kv_addresses ||
+            !text_kv_pages) {
+            return false;
+        }
+        if (has_context_transaction() || pending_transaction_) { return false; }
+        if (continuation_index >= continuation_capacity ||
+            continuation_slots[continuation_index].role != ContinuationSlotRole::Active) {
+            return false;
+        }
+        // ---- Phase 1: read-only validation. No mutation below this line. ----
+        for (const LongAnchorCheckpoint& anchor : state.long_anchors) {
+            if (anchor.frontier == 0 || anchor.rebuild_work.tokens == 0 ||
+                anchor.frontier > state.ledger.size() ||
+                anchor.frontier > state.prefix_digests.size()) {
+                return false;
+            }
+            if (!state_store->valid(anchor.state) ||
+                state_store->role(anchor.state) != StateImageRole::CheckpointImmutable ||
+                state_store->checkpoint_references(anchor.state) == 0) {
+                return false;
+            }
+        }
+        for (const std::uint32_t index : state.shared_prefix_references) {
+            if (index >= shared_prefix_capacity ||
+                shared_prefix_slots[index].role != SharedPrefixSlotRole::Catalogued ||
+                shared_prefix_states[index].active_references == 0) {
+                return false;
+            }
+        }
+        if (state.state.fork_pending) {
+            if (!state_store->valid(state.state.read) || !state_store->valid(state.state.write) ||
+                !state_store->can_abort_fork(state.state.read, state.state.write)) {
+                return false;
+            }
+        } else {
+            // Without a pending fork the active binding must be releasable lifetime state.
+            // A borrowed read belongs to an outside owner and must not be discarded here.
+            if (state.state.borrows_read()) { return false; }
+        }
+        if (state.reserved_state && (!state_store->valid(*state.reserved_state) ||
+                                     state_store->checkpoint_references(*state.reserved_state) !=
+                                         0)) {
+            return false;
+        }
+        // Build the anchor-only summary before mutating (checkpoint_summary is const).
+        qwen3_5::ContinuationSummary summary;
+        summary.long_anchors.reserve(state.long_anchors.size());
+        for (const LongAnchorCheckpoint& anchor : state.long_anchors) {
+            summary.long_anchors.push_back(
+                checkpoint_summary(state,
+                                   runtime::CheckpointRef{
+                                       .kind     = runtime::CheckpointKind::LongAnchor,
+                                       .frontier = anchor.frontier,
+                                       .ordinal  = anchor.ordinal,
+                                   },
+                                   anchor.state, anchor.rebuild_work));
+        }
+        if (summary.long_anchors.empty()) { return false; }
+        // ---- Phase 2: mutation. Preconditions above make each step infallible. ----
+        const auto fail = []() noexcept { std::terminate(); };
+        for (const std::uint32_t index : state.shared_prefix_references) {
+            --shared_prefix_states[index].active_references;
+        }
+        state.shared_prefix_references.clear();
+        if (state.state.fork_pending) {
+            state_store->abort_fork(state.state.read, state.state.write);
+        }
+        const auto anchor_holds = [&](StateImageHandle handle) {
+            for (const LongAnchorCheckpoint& anchor : state.long_anchors) {
+                if (anchor.state == handle) { return true; }
+            }
+            return false;
+        };
+        const auto release_lifetime = [&](StateImageHandle handle) {
+            if (!state_store->valid(handle) || anchor_holds(handle) ||
+                state_store->checkpoint_references(handle) != 0) {
+                return;
+            }
+            if (!state_store->release(handle)) { fail(); }
+        };
+        if (state.rewrite_state) {
+            const StateImageHandle handle = *state.rewrite_state;
+            if (!anchor_holds(handle) && handle != state.state.read &&
+                handle != state.state.write) {
+                if (state_store->checkpoint_references(handle) == 0) { return false; }
+                state_store->release_checkpoint_reference(handle);
+                if (state_store->valid(handle) &&
+                    state_store->checkpoint_references(handle) == 0) {
+                    if (!state_store->release(handle)) { fail(); }
+                }
+            }
+            state.rewrite_state.reset();
+            state.rewrite_checkpoint = {};
+        }
+        if (state.reserved_state) {
+            // Validated above: unreferenced lifetime reservation, never an anchor.
+            if (!state_store->release(*state.reserved_state)) { fail(); }
+            state.reserved_state.reset();
+        }
+        // Active binding is partial-prefill lifetime, never a checkpoint: release it.
+        // Anchor handles are spared by release_lifetime's ref/duplicate guards.
+        release_lifetime(state.state.write);
+        if (state.state.read != state.state.write) { release_lifetime(state.state.read); }
+        state.state = {};
+        state.endpoint_valid = false;
+        refresh_state_views(state);
+        unbind_sequence_kv(state);
+        request.prefill.reset();
+        request.lifecycle            = Lifecycle::Empty;
+        request.pending              = {};
+        request.active_resources     = {};
+        request.optional_resources   = {};
+        request.publish_continuation = true;
+        continuation_slots[continuation_index].role = ContinuationSlotRole::Catalogued;
+        active_continuations[lane]  = continuation_capacity;
+        invalidate_lane(lane);
+        out.timings     = request.timings;
+        out.speculative = std::move(request.speculative_stats);
+        out.summary     = std::move(summary);
+        out.summary.active_references = 0;
+        out.continuation.emplace(ContractAccess::make_continuation(
+            this, continuation_index, continuation_slots[continuation_index].generation));
+        out.salvaged = true;
+        out.status   = runtime::ConsumeStatus::Consumed;
+        advance_resource_revision();
+        return true;
+    } catch (...) { return false; }
+}
+
 AbortResult ProgramImpl::abort(SequenceHandle sequence) noexcept {
     AbortResult out;
     if (has_context_transaction() || pending_transaction_) {
@@ -686,7 +827,17 @@ AbortResult ProgramImpl::abort(SequenceHandle sequence) noexcept {
                      static_cast<int>(request.lifecycle));
         return out;
     }
-    SequenceState& state = active_sequence(lane);
+    SequenceState& state                   = active_sequence(lane);
+    const std::uint32_t continuation_index = active_continuations[lane];
+    // LOCAL FIX (salvage-on-cancel): a cancelled turn that already banked long anchors
+    // publishes them as an endpoint-less catalogued continuation instead of dropping
+    // them with the lane. An identical retry then reuses the anchors. When there is
+    // nothing salvageable this returns false and the plain abort path below runs.
+    if (salvage_aborted_anchors(state, request, lane, continuation_index, out)) {
+        std::fprintf(stderr, "[ninfer] abort salvaged: lane %u anchors=%zu\n", lane,
+                     out.summary.long_anchors.size());
+        return out;
+    }
     if (!clear_lane_strict(state, request)) {
         // LOCAL DIAGNOSTIC (teardown-blockers): kv_releasable=0 alone cannot tell pins
         // apart from lifecycle desync. Count pages by blocking cause so the next wedge

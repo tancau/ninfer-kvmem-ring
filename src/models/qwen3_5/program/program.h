@@ -831,6 +831,14 @@ struct AbortResult {
     runtime::ConsumeStatus status = runtime::ConsumeStatus::InvariantMismatch;
     GenerationTimings timings;
     SpeculativeStats speculative;
+    // LOCAL FIX (salvage-on-cancel): a cancelled turn may have banked long anchors
+    // before the cancel arrived. When salvage succeeds the aborted lane's anchors are
+    // published as a catalogued continuation (endpoint-less) instead of being dropped
+    // with the lane, so an identical retry can reuse them. Empty when nothing was
+    // salvaged (behaviour identical to the old abort path).
+    bool salvaged = false;
+    ContinuationSummary summary;
+    std::optional<ContinuationHandle> continuation;
 };
 
 struct ReleaseResult {
