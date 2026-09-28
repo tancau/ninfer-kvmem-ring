@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <limits>
 #include <optional>
@@ -1885,6 +1886,21 @@ void ProgramImpl::commit_sequence_kv(SequenceState& sequence, std::uint32_t main
     if (!sequence.kv || main_tokens > capacity || backend_tokens > capacity ||
         (backend_tokens != 0 && !sequence.kv->backend)) {
         throw std::logic_error("KV commit request is outside the sequence bundle");
+    }
+    // LOCAL DIAGNOSTIC (commit-skew tripwire): a production long session failed with
+    // "KV committed frontier is invalid: frontier=94465 committed=94464" (under-mapping:
+    // commit one token past mapped pages, no reproduction yet). Name the sequence
+    // accounting at the throw so the next recurrence identifies the skew source
+    // (e.g. text_kv_valid past ledger => forced/commit path; cursor past mapping =>
+    // prefill pairing). Behaviour unchanged: commit_frontier still throws.
+    if (text_kv_addresses &&
+        kv_pages_for_frontier(main_tokens) >
+            text_kv_addresses->mapped_pages(sequence.kv->text)) {
+        std::fprintf(stderr,
+                     "[ninfer] kv commit under-mapped: frontier=%u mapped_pages=%u "
+                     "ledger=%zu exec=%u kvvalid=%u\n",
+                     main_tokens, text_kv_addresses->mapped_pages(sequence.kv->text),
+                     sequence.ledger.size(), sequence.execution_frontier, sequence.text_kv_valid);
     }
     text_kv_addresses->commit_frontier(sequence.kv->text, main_tokens);
     if (sequence.kv->backend) {
