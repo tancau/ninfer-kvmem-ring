@@ -829,6 +829,13 @@ void ProgramImpl::prepare_materialization(MaterializationTransaction& transactio
             for (std::uint32_t page = 0; page < mapped; ++page) {
                 if (!pages.device_resident(addresses.logical_page(address, page))) { ++missing; }
             }
+            // LOCAL FIX (ring restore room): restoring a checkpoint's Host pages needs
+            // Device room, but nothing demoted first, so a pool already holding other
+            // residents failed the single-page materialization. Drain the inactive
+            // addresses (pure cache) before restoring this one.
+            if (missing != 0) {
+                (void)demote_other_addresses_to_host(addresses, pages, address, missing);
+            }
             if (source_reservation) {
                 pages.physical_pool().resize_reservation(reservation, missing);
             }

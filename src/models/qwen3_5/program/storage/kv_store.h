@@ -275,7 +275,7 @@ public:
         if (free_count_ == 0) {
             throw std::logic_error("logical KV descriptors exhausted before physical capacity");
         }
-        DeviceKVPageLease lease   = physical_->materialize_one(reservation);
+        DeviceKVPageLease lease   = physical_->materialize_one(reservation, "logical-materialize");
         const std::uint32_t index = free_[--free_count_];
         Page& page                = pages_[index];
         page.device_replica.emplace(std::move(lease));
@@ -343,7 +343,7 @@ public:
             committed_columns > static_cast<std::uint32_t>(kPagedKVPageSize) || free_count_ == 0) {
             throw std::invalid_argument("logical KV transfer destination is invalid");
         }
-        DeviceKVPageLease lease   = physical_->materialize_one(reservation);
+        DeviceKVPageLease lease   = physical_->materialize_one(reservation, "transfer-dest");
         const std::uint32_t index = free_[--free_count_];
         Page& page                = pages_[index];
         page.device_replica.emplace(std::move(lease));
@@ -480,7 +480,7 @@ public:
             page.host_replica->committed_columns != page.committed_columns) {
             throw std::logic_error("logical KV Device restore is not reservable");
         }
-        page.pending_device_replica.emplace(physical_->materialize_one(reservation));
+        page.pending_device_replica.emplace(physical_->materialize_one(reservation, "reserve-replica"));
         page.destination_pinned = true;
         return page.pending_device_replica->handle();
     }

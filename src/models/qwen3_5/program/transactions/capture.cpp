@@ -967,7 +967,21 @@ ActiveCaptureResult ProgramImpl::publish_active_capture(ActiveCaptureTransaction
                                                         : prefill.initial_mtp_extent - 1U))
             : speculative_backend == SpeculativeBackend::DFlash ? prefill.prompt_tokens
                                                                 : 0U;
-        ensure_sequence_kv_mapped(sequence, prefill.prompt_tokens, backend_materialized);
+        // LOCAL FIX (ring incremental map): after a capture the whole prompt cannot be
+        // mapped at once under the ring: the pool is smaller than the logical context
+        // (observed: one batch of 1766 pages against a 1500-page pool, "Paged KV
+        // reservation invariant"). Map only up to the prefill cursor plus one chunk and
+        // let the prefill loop extend the mapping incrementally, exactly as for root.
+        std::uint32_t map_target = prefill.prompt_tokens;
+        if (text_kv_pages != nullptr && text_kv_addresses != nullptr &&
+            text_kv_pages->physical_pool().usable_pages() != 0 &&
+            text_kv_pages->physical_pool().usable_pages() <
+                text_kv_addresses->logical_page_capacity()) {
+            map_target = std::min(prefill.prompt_tokens, prefill.cursor + prefill_chunk);
+        }
+        const std::uint32_t map_backend =
+            backend_materialized <= map_target ? backend_materialized : map_target;
+        ensure_sequence_kv_mapped(sequence, map_target, map_backend);
     }
 
     detail::PhysicalResources removed = transaction.capacity_preparation_removed;

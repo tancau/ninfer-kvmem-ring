@@ -453,15 +453,16 @@ void DeviceKVPagePool::materialize(DeviceKVPageReservation& reservation,
     reservation.pages_ -= count;
 }
 
-DeviceKVPageLease DeviceKVPagePool::materialize_one(DeviceKVPageReservation& reservation) {
+DeviceKVPageLease DeviceKVPagePool::materialize_one(DeviceKVPageReservation& reservation,
+                                                     const char* tag) {
     if (!reservation.belongs_to(*this) || reservation.pages_ == 0) {
         throw std::invalid_argument("Paged KV single-page materialization exceeds reservation");
     }
     if (free_page_runs_.empty()) {
         std::fprintf(stderr,
-                     "[diag] materialize-one FAIL usable=%u allocated=%u reserved=%u "
+                     "[diag] materialize-one FAIL tag=%s usable=%u allocated=%u reserved=%u "
                      "reservation=%u\n",
-                     usable_pages(), allocated_pages_, reserved_pages_, reservation.pages_);
+                     tag, usable_pages(), allocated_pages_, reserved_pages_, reservation.pages_);
         throw std::logic_error("Paged KV reservation invariant was violated");
     }
     KVPageRun& run        = free_page_runs_.front();
