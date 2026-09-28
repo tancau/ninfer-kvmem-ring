@@ -347,26 +347,41 @@ std::optional<AdmissionCandidate> ProgramImpl::inspect_admission(
     // context on the Device, which is exactly what the pool cannot hold. Decline the reuse so the
     // planner falls back to a fresh root; the ring rebuilds the resident set during prefill.
     // Sources that are fully Device-resident keep the normal fast reuse path.
+    // LOCAL FIX (scoped-reuse-decline): the prototype scanned the WHOLE source bundle, so any
+    // demoted tail vetoed every checkpoint from that source -- including anchors fully inside
+    // the resident region. Only the adopted checkpoint's own range matters (the tail beyond it
+    // is recomputed after reuse_base); demoted pages inside the range ride the existing H2D
+    // restore machinery, which fails loudly on unrestorable replicas instead of corrupting.
+    // The remaining static gate is capacity: a frontier the pool cannot hold at all still
+    // declines. Backend keeps the conservative whole-bundle scan (untouched).
     if (text_kv_addresses != nullptr && text_kv_pages != nullptr &&
-        (source_state != nullptr || shared_state != nullptr)) {
+        (source_state != nullptr || shared_state != nullptr) && checkpoint.has_value()) {
+        const std::uint32_t need = kv_pages_for_frontier(checkpoint->frontier);
+        const std::uint32_t usable = text_kv_pages->physical_pool().usable_pages();
+        if (need > usable) { return std::nullopt; }
+        // Else fall through: the checkpoint fits the pool; demoted pages inside its
+        // range ride the existing H2D restore machinery, and the tail beyond it is
+        // recomputed after reuse_base.
+        // Backend keeps the conservative whole-bundle scan: backend restore under
+        // pressure is unverified, and a backend veto only costs a miss (status quo),
+        // while a failed backend restore could wedge where a miss would not.
         const SequenceKVBundle* bundle = nullptr;
         if (source_state != nullptr && source_state->kv) {
             bundle = &*source_state->kv;
         } else if (shared_state != nullptr && shared_state->kv) {
             bundle = &*shared_state->kv;
         }
-        if (bundle != nullptr && text_kv_addresses->valid(bundle->text)) {
-            const std::uint32_t mapped = text_kv_addresses->mapped_pages(bundle->text);
-            std::uint32_t host_pages   = 0;
+        if (bundle != nullptr && bundle->backend && backend_kv_addresses != nullptr &&
+            backend_kv_pages != nullptr) {
+            const std::uint32_t mapped = backend_kv_addresses->mapped_pages(*bundle->backend);
             for (std::uint32_t page = 0; page < mapped; ++page) {
                 const LogicalKVPageHandle logical =
-                    text_kv_addresses->logical_page(bundle->text, page);
-                if (text_kv_pages->valid(logical) && text_kv_pages->host_resident(logical)) {
-                    ++host_pages;
-                    break;
+                    backend_kv_addresses->logical_page(*bundle->backend, page);
+                if (backend_kv_pages->valid(logical) &&
+                    backend_kv_pages->host_resident(logical)) {
+                    return std::nullopt;
                 }
             }
-            if (host_pages != 0) { return std::nullopt; }
         }
     }
 
