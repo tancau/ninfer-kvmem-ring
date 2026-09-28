@@ -1037,3 +1037,33 @@ decoding.
 
 Prompt-token usage includes chat-template and expanded media tokens. Generated-token usage comes
 from accepted output token IDs, including a stop token whose decoded text may be withheld.
+
+### Draft-KV (speculative backend) operational boundaries
+
+These are configuration boundaries, not engine defects. Both were reproduced on
+`--spec dflash2` and reported externally; the mechanism below is spec-agnostic wherever a
+speculative backend is enabled.
+
+The draft (backend) KV needs its own Device pages. The admission bundle only carries a
+backend address space when the planner grants a nonzero backend page entitlement
+(`prefill.cpp`: `root_backend_address` must mirror `backend_kv_page_entitlement`), and every
+chunked-prefill step then maps the draft side too (`ensure_sequence_kv_mapped(sequence,
+chunk_end, chunk_end)` in the prefill loop). If the draft side was never allocated, that call
+throws `backend KV materialization requested without an allocation`
+(`program/storage/context.cpp`), the request fails with HTTP 500, and the engine latches
+`failed_` so every later request gets HTTP 503 until restart.
+
+Two ways to hit it:
+
+1. **Draft page budget.** Without cache-state caps, or with a pool larger than the Device can
+   back for both main and draft KV, the draft allocation finds no pages and the entitlement
+   drops to zero. A known-good floor for dflash2 is single-flight cache state with a small
+   pool, e.g. `--max-concurrency 1 --media-cache-mib 0 --response-store-max-mib 16
+   --max-private-continuations 1 --max-shared-prefixes 1
+   --max-long-anchors-per-continuation 0` with `--kv-capacity 32768`.
+2. **Prompt longer than `--prefill-chunk`.** Reproduced at chunk 8192: prompts of 8,188 /
+   8,191 / 8,192 tokens return 200 while 8,193 / 8,200 fail in ~0 s at admission with HTTP
+   500; the same lengths under MTP are unaffected. Past the first chunk the planner grants no
+   backend entitlement for the dflash2 draft shape, so the admission mapping step throws at
+   the point above. Effective rule: keep dflash2 prompts within one `--prefill-chunk`, or
+   raise the chunk to cover the longest expected prompt.
