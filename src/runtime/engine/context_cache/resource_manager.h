@@ -2100,6 +2100,13 @@ private:
                     if (observation == nullptr) {
                         throw std::logic_error("catalogued checkpoint has no policy observation");
                     }
+                    // LOCAL DIAGNOSTIC (match-trace): log every catalogued checkpoint
+                    // considered for reuse, so a root verdict shows whether anchors
+                    // were even evaluated.
+                    std::fprintf(stderr,
+                                 "[ninfer] match candidate: kind=%d frontier=%u ordinal=%u\n",
+                                 static_cast<int>(checkpoint.ref.kind), checkpoint.ref.frontier,
+                                 checkpoint.ref.ordinal);
                     selected_hits = std::max(selected_hits, observation->selected_hit_count);
                     checkpoint_policies.push_back(MaterializationCheckpointPolicy{
                         .owner              = owner,
