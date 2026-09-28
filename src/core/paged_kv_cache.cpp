@@ -456,6 +456,11 @@ void DeviceKVPagePool::materialize(DeviceKVPageReservation& reservation,
 DeviceKVPageLease DeviceKVPagePool::materialize_one(DeviceKVPageReservation& reservation,
                                                      const char* tag) {
     if (!reservation.belongs_to(*this) || reservation.pages_ == 0) {
+        std::fprintf(stderr,
+                     "[diag] materialize-one EXHAUSTED tag=%s reservation=%u usable=%u "
+                     "allocated=%u free_runs=%zu\n",
+                     tag, reservation.pages_, usable_pages(), allocated_pages_,
+                     free_page_runs_.size());
         throw std::invalid_argument("Paged KV single-page materialization exceeds reservation");
     }
     if (free_page_runs_.empty()) {

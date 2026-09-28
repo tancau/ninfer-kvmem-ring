@@ -832,11 +832,63 @@ void ProgramImpl::prepare_materialization(MaterializationTransaction& transactio
             // LOCAL FIX (ring restore room): restoring a checkpoint's Host pages needs
             // Device room, but nothing demoted first, so a pool already holding other
             // residents failed the single-page materialization. Drain the inactive
-            // addresses (pure cache) before restoring this one.
+            // addresses (pure cache) first, then this address's own tail beyond the
+            // reuse frontier -- that tail is recomputed on reuse and may legitimately
+            // hold most of the pool (observed: 945 of 1500 pages).
             if (missing != 0) {
-                (void)demote_other_addresses_to_host(addresses, pages, address, missing);
+                std::uint32_t freed =
+                    demote_other_addresses_to_host(addresses, pages, address, missing);
+                const std::uint32_t freed_other = freed;
+                std::uint32_t freed_tail = 0;
+                if (freed < missing) {
+                    const std::uint32_t full_mapped = addresses.mapped_pages(address);
+                    std::vector<std::uint32_t> keep_head;
+                    keep_head.reserve(mapped);
+                    for (std::uint32_t page = 0; page < mapped; ++page) {
+                        keep_head.push_back(page);
+                    }
+                    freed_tail = demote_kv_pages_to_host(addresses, pages, address, 0U,
+                                                         missing - freed, keep_head);
+                    freed += freed_tail;
+                }
+                {
+                    // LOCAL DIAGNOSTIC (restore-state): full state at the restore so a
+                    // capacity contradiction (or a full Host arena) is visible in one run.
+                    const DeviceKVPagePool& pool = pages.physical_pool();
+                    std::uint32_t skip_dev = 0;
+                    for (std::uint32_t page = 0; page < addresses.mapped_pages(address); ++page) {
+                        if (pages.device_resident(addresses.logical_page(address, page))) {
+                            ++skip_dev;
+                        }
+                    }
+                    std::fprintf(stderr,
+                                 "[ninfer] restore-state: missing=%u frontier_pages=%u freed_other=%u "
+                                 "freed_tail=%u pool{usable=%u allocated=%u reserved=%u} host_used=%zu "
+                                 "addr{mapped=%u dev=%u}\n",
+                                 missing, mapped, freed_other, freed_tail, pool.usable_pages(),
+                                 pool.allocated_pages(), pool.reserved_pages(),
+                                 host_kv_arena ? host_kv_arena->occupied_bytes() : 0U,
+                                 addresses.mapped_pages(address), skip_dev);
+                }
+                // The tail demotion's second pass may also have demoted pages inside the
+                // reuse range, so the restore now has to bring back more than the original
+                // count. Re-count and size the reservation to what will actually be
+                // materialized, otherwise it runs out mid-loop.
+                missing = 0;
+                for (std::uint32_t page = 0; page < mapped; ++page) {
+                    if (!pages.device_resident(addresses.logical_page(address, page))) {
+                        ++missing;
+                    }
+                }
             }
             if (source_reservation) {
+                pages.physical_pool().resize_reservation(reservation, missing);
+            } else if (reservation.pages() < missing) {
+                // LOCAL FIX (restore reservation): the activation reservation covers
+                // `missing_replicas + growth` measured at prepare time; this restore loop
+                // materializes exactly the pages it finds Host-only now. If the two counts
+                // disagree (more pages demoted since prepare) the reservation runs out
+                // mid-loop ("single-page materialization exceeds reservation"). Top it up.
                 pages.physical_pool().resize_reservation(reservation, missing);
             }
             for (std::uint32_t page = 0; page < mapped; ++page) {
