@@ -394,6 +394,14 @@ public:
     [[nodiscard]] DeviceKVPageHandle physical(LogicalKVPageHandle handle) const {
         const Page& page = require(handle);
         if (!page.device_replica) {
+            // LOCAL DIAGNOSTIC (missing-replica): name the page state so a ring-demote
+            // race (pinned-but-demoted, or a host-only read) is visible.
+            std::fprintf(stderr,
+                         "[ninfer] physical() missing replica: idx=%u host=%d pins=%u refs=%u "
+                         "active=%u writers=%u occupied=%d\n",
+                         handle.index_, page.host_replica.has_value() ? 1 : 0, page.source_pins,
+                         page.references, page.active_references, page.writer_references,
+                         page.occupied ? 1 : 0);
             throw std::logic_error("logical KV page has no Device replica");
         }
         return page.device_replica->handle();
