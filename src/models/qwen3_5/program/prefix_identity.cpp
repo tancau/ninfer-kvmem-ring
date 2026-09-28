@@ -1,6 +1,7 @@
 #include "models/qwen3_5/program/prefix_identity.h"
 #include <algorithm>
 #include <bit>
+#include <cstdio>
 #include <iterator>
 #include <limits>
 #include <stdexcept>
@@ -409,10 +410,17 @@ std::array<std::uint64_t, 2> PrefixShortlistDigests::at(std::size_t frontier) co
 bool prefix_matches(const PreparedPromptData& prompt, std::span<const TokenId> resident_tokens,
                     const ResidentPrefixIdentity& resident_identity, std::size_t count) {
     if (count > prompt.token_ids.size() || count > resident_tokens.size()) { return false; }
-    return std::equal(prompt.token_ids.begin(),
-                      prompt.token_ids.begin() + static_cast<std::ptrdiff_t>(count),
-                      resident_tokens.begin()) &&
-           resident_identity.matches(prompt, count);
+    // LOCAL DIAGNOSTIC (match-trace): manager-level shortlist matched but program-level
+    // refuses. Name whether tokens or identity digests diverge, and at which frontier.
+    const bool tokens_equal =
+        std::equal(prompt.token_ids.begin(),
+                   prompt.token_ids.begin() + static_cast<std::ptrdiff_t>(count),
+                   resident_tokens.begin());
+    const bool identity_equal = resident_identity.matches(prompt, count);
+    if (tokens_equal && identity_equal) { return true; }
+    std::fprintf(stderr, "[ninfer] prefix mismatch: count=%zu tokens=%d identity=%d\n", count,
+                 tokens_equal ? 1 : 0, identity_equal ? 1 : 0);
+    return false;
 }
 
 } // namespace ninfer::models::qwen3_5::detail
