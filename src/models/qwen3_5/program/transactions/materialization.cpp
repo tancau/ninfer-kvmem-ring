@@ -836,24 +836,43 @@ void ProgramImpl::prepare_materialization(MaterializationTransaction& transactio
             // reuse frontier -- that tail is recomputed on reuse and may legitimately
             // hold most of the pool (observed: 945 of 1500 pages).
             if (missing != 0) {
-                std::uint32_t freed =
-                    demote_other_addresses_to_host(addresses, pages, address, missing);
-                const std::uint32_t freed_other = freed;
-                std::uint32_t freed_tail = 0;
-                if (freed < missing) {
-                    const std::uint32_t full_mapped = addresses.mapped_pages(address);
+                (void)demote_other_addresses_to_host(addresses, pages, address, missing);
+                // Demote this address's tail (beyond the reuse frontier) until the pool
+                // has room for the whole restore. The demote's second pass may also drop
+                // pages inside the reuse range, which grows the requirement, so re-count
+                // and repeat until the free room covers the count (bounded, best effort).
+                for (int round = 0; round < 8; ++round) {
+                    std::uint32_t need = 0;
+                    for (std::uint32_t page = 0; page < mapped; ++page) {
+                        if (!pages.device_resident(addresses.logical_page(address, page))) {
+                            ++need;
+                        }
+                    }
+                    missing = need;
+                    const DeviceKVPagePool& pool = pages.physical_pool();
+                    const std::uint32_t free_now =
+                        pool.usable_pages() > pool.allocated_pages()
+                            ? pool.usable_pages() - pool.allocated_pages()
+                            : 0U;
+                    // Leave a little room for the tail COW and the first mapping chunk
+                    // the reuse will immediately need; without it the restore fills the
+                    // pool exactly and the next single-page materialization has nowhere
+                    // to go.
+                    constexpr std::uint32_t kRestoreSlackPages = 16U;
+                    if (missing == 0 || free_now >= missing + kRestoreSlackPages) { break; }
                     std::vector<std::uint32_t> keep_head;
                     keep_head.reserve(mapped);
                     for (std::uint32_t page = 0; page < mapped; ++page) {
                         keep_head.push_back(page);
                     }
-                    freed_tail = demote_kv_pages_to_host(addresses, pages, address, 0U,
-                                                         missing - freed, keep_head);
-                    freed += freed_tail;
+                    if (demote_kv_pages_to_host(addresses, pages, address, 0U,
+                                                missing + kRestoreSlackPages - free_now,
+                                                keep_head) == 0) {
+                        break;
+                    }
                 }
                 {
-                    // LOCAL DIAGNOSTIC (restore-state): full state at the restore so a
-                    // capacity contradiction (or a full Host arena) is visible in one run.
+                    // LOCAL DIAGNOSTIC (restore-state): what the restore has to work with.
                     const DeviceKVPagePool& pool = pages.physical_pool();
                     std::uint32_t skip_dev = 0;
                     for (std::uint32_t page = 0; page < addresses.mapped_pages(address); ++page) {
@@ -862,23 +881,11 @@ void ProgramImpl::prepare_materialization(MaterializationTransaction& transactio
                         }
                     }
                     std::fprintf(stderr,
-                                 "[ninfer] restore-state: missing=%u frontier_pages=%u freed_other=%u "
-                                 "freed_tail=%u pool{usable=%u allocated=%u reserved=%u} host_used=%zu "
-                                 "addr{mapped=%u dev=%u}\n",
-                                 missing, mapped, freed_other, freed_tail, pool.usable_pages(),
-                                 pool.allocated_pages(), pool.reserved_pages(),
+                                 "[ninfer] restore-state: missing=%u frontier_pages=%u "
+                                 "pool{usable=%u allocated=%u} host_used=%zu addr{mapped=%u dev=%u}\n",
+                                 missing, mapped, pool.usable_pages(), pool.allocated_pages(),
                                  host_kv_arena ? host_kv_arena->occupied_bytes() : 0U,
                                  addresses.mapped_pages(address), skip_dev);
-                }
-                // The tail demotion's second pass may also have demoted pages inside the
-                // reuse range, so the restore now has to bring back more than the original
-                // count. Re-count and size the reservation to what will actually be
-                // materialized, otherwise it runs out mid-loop.
-                missing = 0;
-                for (std::uint32_t page = 0; page < mapped; ++page) {
-                    if (!pages.device_resident(addresses.logical_page(address, page))) {
-                        ++missing;
-                    }
                 }
             }
             if (source_reservation) {
@@ -891,6 +898,12 @@ void ProgramImpl::prepare_materialization(MaterializationTransaction& transactio
                 // mid-loop ("single-page materialization exceeds reservation"). Top it up.
                 pages.physical_pool().resize_reservation(reservation, missing);
             }
+            const std::size_t restores_before = restores.size();
+            std::fprintf(stderr,
+                         "[ninfer] restore-loop begin: missing=%u reservation=%u "
+                         "pool{usable=%u allocated=%u}\n",
+                         missing, reservation.pages(), pages.physical_pool().usable_pages(),
+                         pages.physical_pool().allocated_pages());
             for (std::uint32_t page = 0; page < mapped; ++page) {
                 const LogicalKVPageHandle logical = addresses.logical_page(address, page);
                 if (pages.device_resident(logical)) { continue; }
@@ -907,6 +920,12 @@ void ProgramImpl::prepare_materialization(MaterializationTransaction& transactio
                 });
                 destinations.push_back(destination);
             }
+            std::fprintf(stderr,
+                         "[ninfer] restore-loop end: restored=%zu reservation=%u "
+                         "pool{usable=%u allocated=%u}\n",
+                         restores.size() - restores_before, reservation.pages(),
+                         pages.physical_pool().usable_pages(),
+                         pages.physical_pool().allocated_pages());
         };
     DeviceKVPageReservation& text_restore_reservation =
         text_prefix_fork ? *transaction.text_source_restore_reservation
