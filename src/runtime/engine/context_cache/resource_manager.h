@@ -2135,6 +2135,19 @@ private:
                                  static_cast<int>(checkpoint.ref.kind), checkpoint.ref.frontier,
                                  checkpoint.ref.ordinal);
                     selected_hits = std::max(selected_hits, observation->selected_hit_count);
+                    // LOCAL DIAGNOSTIC (value-trace): root keeps beating matched anchors.
+                    // Log both sides of the trade to see the mispricing directly.
+                    const std::uint64_t rebuild_ns =
+                        cost_model_.prefill_ns(checkpoint.rebuild_work);
+                    const std::uint64_t recovery_ns = price_checkpoint_recovery_work(
+                        cost_model_,
+                        program.checkpoint_recovery_work(*entry.handle, checkpoint.ref));
+                    std::fprintf(stderr,
+                                 "[ninfer] checkpoint value: kind=%d frontier=%u rebuild_ns=%llu "
+                                 "recovery_ns=%llu\n",
+                                 static_cast<int>(checkpoint.ref.kind), checkpoint.ref.frontier,
+                                 (unsigned long long)rebuild_ns,
+                                 (unsigned long long)recovery_ns);
                     checkpoint_policies.push_back(MaterializationCheckpointPolicy{
                         .owner              = owner,
                         .checkpoint         = checkpoint.ref,
@@ -2143,10 +2156,8 @@ private:
                         .last_hit_epoch     = observation->last_hit_epoch,
                         .demand_mask =
                             demand_mask_for(checkpoint.shortlist_key, provisional_demand),
-                        .rebuild_ns           = cost_model_.prefill_ns(checkpoint.rebuild_work),
-                        .baseline_recovery_ns = price_checkpoint_recovery_work(
-                            cost_model_,
-                            program.checkpoint_recovery_work(*entry.handle, checkpoint.ref)),
+                        .rebuild_ns           = rebuild_ns,
+                        .baseline_recovery_ns = recovery_ns,
                     });
                 };
                 if (entry.summary.endpoint) { append_checkpoint(*entry.summary.endpoint); }
