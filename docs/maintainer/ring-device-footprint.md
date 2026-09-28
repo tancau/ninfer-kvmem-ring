@@ -73,10 +73,27 @@ dimensions, so admission does not see that need and does not evict victims for
 it. When the pool is already held by the previous session's resident window the
 restore cannot be funded and the request fails.
 
-Two ways out:
+Resolved for the direct case (`02f2e81`, `3470fed`, `bfbcc5b`): before restoring,
+demote the inactive addresses, then this address's own tail beyond the reuse
+frontier; re-count until the free room covers the restore, and keep 16 pages of
+slack for the tail COW and the first mapping chunk. The production shape (96K
+pool, 127K prompt, 33 tools) now completes three turns with `cache 65,536
+(51.7%, long anchor)` on turns 2-3.
 
-1. Admission accounts the restore need (inside the ring clamp) so the planner
-   evicts victims or picks a frontier that fits. This is the correct fix and the
-   next batch target.
-2. A graceful fallback: an unfundable reuse degrades to root recompute for that
-   turn instead of failing the request.
+Remaining: admission still does not price the restore, so it never evicts
+victims for it -- the materialization succeeds only because it demotes the tail
+itself. A pathological shape (a short reuse whose restore cannot fit) would still
+fail rather than fall back.
+
+## Pool size caps reuse depth
+
+An anchor is published only if its own range fits the pool (the scoped-publish
+scan). With a 96K pool (1500 pages) the 98304 frontier (1536 pages) is declined,
+so the deepest banked anchor is 65536: a 127K session reuses ~51% and still
+spends ~9.5 minutes recomputing the tail. With a 144K pool the endpoint itself
+fits, so the same session reuses the whole prefix (seconds).
+
+Consequence: the ring buys correctness past the pool, but turn latency is set by
+how much of the session the pool can hold. Size the pool to the working session,
+not to the smallest value that avoids a crash.
+
