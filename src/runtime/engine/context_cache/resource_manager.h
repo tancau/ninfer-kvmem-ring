@@ -326,6 +326,20 @@ public:
 
         if (cache_enabled_) {
             for (const PrefixIndexEntry& index : prefix_index_) {
+                // LOCAL DIAGNOSTIC (match-trace): a root verdict with banked anchors
+                // must show whether the anchors matched (value bug) or not (digest
+                // or catalog bug). Log every index entry's match outcome.
+                {
+                    const bool valid = valid_prefix_index_entry(index);
+                    const std::optional<PrefixShortlistKey> probe =
+                        valid ? base.prefix_shortlist_key(index.key.frontier) : std::nullopt;
+                    std::fprintf(stderr,
+                                 "[ninfer] match check: frontier=%u shared=%d valid=%d "
+                                 "incoming=%d equal=%d\n",
+                                 index.key.frontier, index.shared ? 1 : 0, valid ? 1 : 0,
+                                 probe.has_value() ? 1 : 0,
+                                 (probe && *probe == index.key) ? 1 : 0);
+                }
                 if (!valid_prefix_index_entry(index)) { continue; }
                 const std::optional<PrefixShortlistKey> incoming =
                     base.prefix_shortlist_key(index.key.frontier);
