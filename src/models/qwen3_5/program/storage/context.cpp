@@ -1595,7 +1595,11 @@ std::uint32_t ProgramImpl::demote_kv_pages_to_host(KVAddressSpaceStore& addresse
             // Copy on the compute stream so the D2H is ordered after the kernels that wrote it.
             pages.physical_pool().copy_to_host(sources, host_kv_extents->writable_view(*reserved),
                                                device.stream);
-            (void)host_kv_extents->publish(std::move(*reserved));
+            if (!host_kv_extents->publish(std::move(*reserved))) {
+                // The page would not take a Host replica. Leave it Device-resident and move on:
+                // demotion is best-effort by design and must never cost more than the room asked.
+                continue;
+            }
         } else {
             // Already preserved on the Host (demoted before and then retrieved): no transfer needed.
             if (!pages.host_replica_current(logical)) { continue; }
@@ -1615,7 +1619,7 @@ std::uint32_t ProgramImpl::demote_other_addresses_to_host(KVAddressSpaceStore& a
     if (host_kv_extents == nullptr || target_free == 0) { return 0; }
     std::uint32_t freed = 0;
     std::uint32_t slots_visited = 0, skip_invalid = 0, skip_noresident = 0, skip_pins = 0,
-                  skip_stalehost = 0;
+                  skip_stalehost = 0, skip_duplicate = 0;
     std::vector<LogicalKVPageHandle> batch;
     batch.reserve(64);
     const auto flush = [&]() -> bool {
@@ -1626,7 +1630,13 @@ std::uint32_t ProgramImpl::demote_other_addresses_to_host(KVAddressSpaceStore& a
         // Copy on the compute stream so the D2H is ordered after the kernels that wrote them.
         pages.physical_pool().copy_to_host(sources, host_kv_extents->writable_view(*reserved),
                                            device.stream);
-        (void)host_kv_extents->publish(std::move(*reserved));
+        if (!host_kv_extents->publish(std::move(*reserved))) {
+            // Declined: every page in this batch keeps its Device replica. The D2H already landed
+            // in the reservation publish just released, so nothing else changed -- drop the batch
+            // and keep draining the remaining addresses rather than treating this as a shortfall.
+            batch.clear();
+            return true;
+        }
         for (const LogicalKVPageHandle logical : batch) {
             pages.release_active_reference(logical);
             if (!pages.drop_device_replica(logical)) { return false; }
@@ -1658,6 +1668,14 @@ std::uint32_t ProgramImpl::demote_other_addresses_to_host(KVAddressSpaceStore& a
             }
             // Content not on the Host yet: the extent store pins through `can_pin_source`, which
             // needs the writer reference clear (inactive addresses normally hold none, but be safe).
+            // LOCAL FIX (batch-dedup): a fork/COW page is refcounted, so the same logical page can
+            // be reached through more than one inactive address and land in this batch twice.
+            // Publishing it twice attaches a second Host replica to a page that already carries one,
+            // which threw inside publish and took the engine down. One Host copy per page suffices.
+            if (std::find(batch.begin(), batch.end(), logical) != batch.end()) {
+                ++skip_duplicate;
+                continue;
+            }
             pages.set_writer(logical, false);
             batch.push_back(logical);
             if (batch.size() >= 64 && !flush()) { return; }
@@ -1670,9 +1688,9 @@ std::uint32_t ProgramImpl::demote_other_addresses_to_host(KVAddressSpaceStore& a
     if (freed < target_free) {
         std::fprintf(stderr,
                      "[ninfer] demote-other short: freed=%u want=%u slots=%u invalid=%u "
-                     "noresident=%u pins=%u stalehost=%u\n",
+                     "noresident=%u pins=%u stalehost=%u duplicate=%u\n",
                      freed, target_free, slots_visited, skip_invalid, skip_noresident,
-                     skip_pins, skip_stalehost);
+                     skip_pins, skip_stalehost, skip_duplicate);
     }
     return freed;
 }

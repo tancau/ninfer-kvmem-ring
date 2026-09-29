@@ -110,39 +110,53 @@ depth_pages = pool_pages − working_set_pages
 
 ---
 
-## 4. 结论三：进程死因已从"池耗尽"改判为 **fail-fast**
+## 4. 结论三：九次静默死亡的根因（已定案，附符号化调用栈）
 
-`docs/maintainer` 旧结论与本文 §6 的第一版都把死因写成"池耗尽"。**实测推翻了这个结论。**
+旧结论与本文 §6 的第一版都把死因写成"池耗尽"。**实测推翻了这个结论。**
 
-忠实复现（`repro_shape.py`：87 消息 / 33 工具 / 151,908 token / 取消后重试）在 T2
-第 353 秒杀死引擎，监督器读到：
+忠实复现（`repro_shape.py`：87 消息 / 33 工具 / 190,468 token / 取消后重试）在 T2
+第 284–407 秒杀死引擎，`exit_code=0xC0000409`，无日志、无 dump。
+
+排除法把范围压到"裸 `abort()`"：`apps/serve/main.cpp` 装了 `std::set_terminate`（会退 42）
+和 SEH 过滤器（会退 43），都没响；`device.cu:42` 的 `cuda_check` 先打印再 abort，没响；
+`generation_budget` 与 `gated_delta_net/common.cuh:34` 同样先打印，都没响；
+`JSON_NOEXCEPTION` / `SPDLOG_NO_EXCEPTIONS` 未定义，第三方两处 `abort()` 走的是 `throw`。
+`/GS` 栈 cookie 破坏也被排除：abort 会先 `raise(SIGABRT)`，装上 SIGABRT 钩子后**它响了**。
+
+打开 `NINFER_CRASH_SYMBOLS`（全局 `/Zi` + server 链 dbghelp）后，钩子打出带函数名的栈：
 
 ```
-DEATH pid=9372 exit_code=0xC0000409 uptime=1338s
-VERDICT: NTSTATUS exception 0xC0000409
+advance_prefill → ensure_sequence_kv_mapped → ring_one
+  → demote_other_addresses_to_host → <lambda>
+    → HostKVExtentStore::publish        <- host_kv_store.h:183
+      -> catch -> terminate -> abort -> raise(SIGABRT)
 ```
 
-排除法：
+**根因**：`HostKVExtentStore::publish` 是 `noexcept`，其中
+`if (!page_store->can_attach_host_replica(...)) { std::terminate(); }`
+把"这一页暂时挂不上 host 副本"判成死刑。而在 ring 模式下这页是**常态**——降级、重写、再降级，
+陈旧 host 副本是设计内产物。降级循环一次攒 64 页，**batch 里混进一页就杀掉整个引擎**，
+且调用方把返回值写成 `(void)`，现场无痕。
 
-| 候选 | 判定 | 依据 |
-|---|---|---|
-| 外部杀 / wedge | **排除** | `is_available()` 只影响 503，进程不会消失 |
-| `std::terminate` | **排除** | `apps/serve/main.cpp:45-56` 装了 handler，会打印 `NINFER-CRASH` 并 `exit 42`；实测无该行、码不是 42 |
-| 未处理结构化异常 | **排除** | `main.cpp:65-72` 的 SEH 过滤器会打印并退 43 |
-| `device.cu:54` `cuda_check` abort | **排除** | `device.cu:42` 先打印 file:line + CUDA 错误名才 abort，日志里没有 |
-| `generation_budget.h:16` | **排除** | `request_plan.cpp:246-248` 的 `effective_limit_reason` 恒为 OutputLimit/ContextCapacity |
-| `generation_budget.h:25` | **排除** | `commit()` 只在解码提交路径（`engine_core.h:1252,1942`），死亡发生在 prefill |
-| **裸 `abort()` / `/GS` 栈 cookie 破坏** | **剩余候选** | 两者都产生 0xC0000409 且绕过全部 handler |
+触发时机解释了为什么只在 T2：致命路径需要一个"带陈旧 host 副本的非活跃地址"，
+而这种地址只有在第一轮取消 -> salvage 存下 catalogued continuation 之后才存在。
+T1 干净是预期的。
 
-`0xC0000409` 是 `__fastfail`。剩余两种来源：
-`FAST_FAIL_FATAL_APP_EXIT`（`abort()`，值 0）与
-`FAST_FAIL_STACK_COOKIE_CHECK_FAILURE`（`/GS` 检出栈越界，值 3）。
-**dump 的 `ExceptionInformation[0]` 直接分辨这两个**。
+### 修法（D）
 
-顺带修正一个假线索：此前"没有 dump"被当成崩溃不产生 dump。真相是
-**磁盘只剩 21.24 GB，而 full dump 需要 ~23 GB**，两个陈旧 dump 占着 48.8 GB。
-已清理，并把 `LocalDumps\ninfer-serve.exe` 的 `DumpType` 从 2（full）改为 1（minidump），
-现在剩 66.65 GB。
+`publish` 改为可失败：拒绝该页、释放预留、返回 `std::nullopt`，并打一行
+`host extent publish declined:`。调用方按各自语义处理：
+
+| 调用点 | 行为 |
+|---|---|
+| `demote_kv_pages_to_host` | 跳过该页，保持驻留，试下一页 |
+| `demote_other_addresses_to_host` | 丢弃整批、保持驻留，继续扫后面的地址（**不**计为短计数） |
+| `materialization.cpp` 两处 backup | **仍致命**——那是回滚记录，跳过会毁掉回滚 |
+
+其余不变量（成员链损坏）保持致命：那是 extent 损坏，不是"某页不可发布"。
+
+附带一条假线索的更正：此前"崩溃不产生 dump"其实是**磁盘只剩 21.24 GB、
+而 full dump 需要 ~23 GB**，两个陈旧 dump 占着 48.8 GB。已清理，并改用 minidump。
 
 池耗尽时抛的是 **untyped** 异常：
 

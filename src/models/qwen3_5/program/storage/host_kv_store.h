@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <exception>
 #include <limits>
 #include <optional>
@@ -171,17 +172,42 @@ public:
         return extents_[reservation.descriptor_].page_count;
     }
 
-    [[nodiscard]] HostKVExtentCapability publish(HostKVExtentReservation&& reservation) noexcept {
+    // LOCAL FIX (fallible-publish): "this page cannot take a Host replica right now" is a per-page
+    // condition that ring mode produces routinely -- a page is demoted, written again, and demoted
+    // again, so a stale Host replica on it is normal, and `can_attach_host_replica` says no. It used
+    // to std::terminate() from inside a noexcept function, which no caller could survive or report:
+    // the demote loops batch up to 64 pages, so ONE such page killed the whole engine with no log
+    // line. Publication now declines that page, releases the reservation and returns nullopt; the
+    // ring skips the page. The other invariants stay fatal on purpose -- a broken membership chain
+    // means the extent is corrupt, not that a page is un-publishable.
+    [[nodiscard]] std::optional<HostKVExtentCapability>
+    publish(HostKVExtentReservation&& reservation) noexcept {
         if (!valid(reservation)) { std::terminate(); }
         Extent& extent     = extents_[reservation.descriptor_];
         std::uint32_t node = extent.head;
+        // LOCAL FIX (extent-duplicate-page): a fork/COW page is refcounted, so the SAME logical page
+        // can be reached through two addresses and land in one demote batch twice. Publishing it the
+        // second time attaches a Host replica to a page that already carries one, attach_host_replica
+        // throws, and the catch below used to terminate the process from inside a noexcept function.
+        // One Host copy per page is all a page needs, so a repeat is declined here -- before anything
+        // is attached, which is what makes declining safe.
+        std::vector<LogicalKVPageHandle> seen;
+        seen.reserve(extent.page_count);
         for (std::uint32_t index = 0; index < extent.page_count; ++index) {
             if (node == kInvalidIndex) { std::terminate(); }
-            const Membership& entry = memberships_[node];
-            if (!extent.page_store->can_attach_host_replica(entry.page, entry.epoch,
-                                                            entry.coverage)) {
-                std::terminate();
+            const Membership& entry  = memberships_[node];
+            const bool repeated      = std::find(seen.begin(), seen.end(), entry.page) != seen.end();
+            if (repeated || !extent.page_store->can_attach_host_replica(entry.page, entry.epoch,
+                                                                        entry.coverage)) {
+                std::fprintf(stderr,
+                             "[ninfer] host extent publish declined: descriptor=%u page=%u of %u "
+                             "(%s; page keeps its Device replica)\n",
+                             reservation.descriptor_, index, extent.page_count,
+                             repeated ? "page already in this extent" : "replica not attachable");
+                abort(reservation);
+                return std::nullopt;
             }
+            seen.push_back(entry.page);
             node = entry.next;
         }
         if (node != kInvalidIndex) { std::terminate(); }

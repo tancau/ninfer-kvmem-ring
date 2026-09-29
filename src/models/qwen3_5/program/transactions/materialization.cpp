@@ -1287,7 +1287,10 @@ void ProgramImpl::publish_materialization_transfers(MaterializationTransaction& 
                 if (host_kv_extents == nullptr) {
                     throw std::logic_error("retained KV tail Host store disappeared");
                 }
-                (void)host_kv_extents->publish(std::move(*backup));
+                // A retained backup that cannot be published would corrupt the rollback, so this
+                // stays fatal (publish declined it and said so on stderr first). Unlike the ring's
+                // demote batches, a caller here cannot recover by skipping the page.
+                if (!host_kv_extents->publish(std::move(*backup))) { std::terminate(); }
                 backup.reset();
             }
             addresses.settle_prefix_fork_tail_source(*fork);
@@ -1738,7 +1741,9 @@ void ProgramImpl::publish_pressure_work(MaterializationTransaction::PressureWork
                 }
                 if (change.backup) {
                     if (!host_kv_extents) { std::terminate(); }
-                    (void)host_kv_extents->publish(std::move(*change.backup));
+                    // Fatal on decline, same as the prefix-fork backup above: this reservation is
+                    // the rollback record, not a best-effort demotion.
+                    if (!host_kv_extents->publish(std::move(*change.backup))) { std::terminate(); }
                     change.backup.reset();
                 }
                 for (const LogicalKVPageHandle page : change.pages) {
