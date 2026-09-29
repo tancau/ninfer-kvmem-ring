@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -16,6 +17,28 @@
 #include <vector>
 
 namespace ninfer::models::qwen3_5::detail {
+
+namespace {
+// LOCAL PROTOTYPE (KVMem-style ring): NINFER_KV_HOST_ANCHORS=1 lets a capture be banked even
+// though part of its prefix lives on the Host, so reuse depth stops being capped by whichever
+// pages happen to be resident when the capture comes due. Off by default, so the old rule stays
+// one environment variable away. Arithmetic and the rest of the plan are in
+// docs\maintainer\ring-reuse-depth-and-failure-brief.md.
+bool proto_host_backed_anchors() {
+    static const bool enabled = [] {
+        const char* text = std::getenv("NINFER_KV_HOST_ANCHORS");
+        return text != nullptr && text[0] != '\0' && text[0] != '0';
+    }();
+    return enabled;
+}
+
+// An anchor is only usable if it can be brought back and still leave the pool room for the
+// turn's own working set (the chunk being written plus the retrieval set plus slack). Measured
+// at 256 pages on a 147456-token pool; scaled off the pool so it tracks the configuration.
+constexpr std::uint32_t publish_working_set_pages(std::uint32_t usable_pages) {
+    return usable_pages / 8U < 64U ? 64U : usable_pages / 8U;
+}
+} // namespace
 
 bool ProgramImpl::shared_capture_matches(const CaptureOffer& offer,
                                          const SharedPrefixHandle& shared) const {
@@ -60,22 +83,43 @@ ProgramImpl::inspect_capture(const CaptureOffer& offer, const SharedPrefixHandle
         (group.long_anchor && context_cache.max_long_anchors_per_continuation.value_or(0) != 0);
     const bool publish_shared_requested = group.shared && permit_shared_publication &&
                                           exact_shared == nullptr && shared_prefix_capacity != 0;
-    // LOCAL PROTOTYPE (KVMem-style ring): publishing a continuation snapshots the whole address,
-    // which requires every mapped page Device-resident. Pages the ring demoted to the Host cannot
-    // satisfy that, and restoring the whole context is exactly what the pool cannot hold. A
-    // host-demoted source therefore completes WITHOUT publishing (reuse of it is declined anyway,
-    // so nothing consumes the entry). Fully resident sequences keep the normal fast path.
-    // LOCAL FIX (scoped-publish): the prototype declined publishing whenever ANY
-    // mapped page was host-demoted - including the tail beyond this checkpoint.
-    // Past pool capacity the tail is always demoted, so nothing ever banked and
-    // every later turn fell back to root. Only pages within the capture frontier
-    // belong to this checkpoint; the tail is recomputed (or anchored separately)
-    // on reuse, and banked host pages ride the existing H2D restore machinery.
+    // LOCAL PROTOTYPE (KVMem-style ring): the prototype refused to bank a capture whose prefix had
+    // any Host page in it, on the stated grounds that "reuse of it is declined anyway". That stopped
+    // being true: the only static decline left is capacity (pressure.cpp:359), the planner prices
+    // the H2D restore (request_plan.cpp:819-842), and publishing itself is pure metadata --
+    // install_private_capture touches no KV page. Measured consequence of the refusal: reuse depth
+    // was pinned to whichever frontier happened to be reached before the pool filled (98,304 of a
+    // 147,456 pool) and every deeper capture was declined as "host-demoted pages inside range".
+    //
+    // LOCAL PROTOTYPE (host-backed anchors, NINFER_KV_HOST_ANCHORS=1): bank it by reference instead.
+    // A LongAnchor reuses as a Retain source, which forks the prefix and therefore needs the whole
+    // range Device-resident -- but prepare_kv_restores runs first and brings it back H2D, and its
+    // loop now converges and re-counts before sizing the reservation (restore-converge). The one
+    // rule that must hold is capacity: an anchor is only worth banking if it can be restored AND
+    // still leave the pool room for the turn's own working set. Anchors that cannot are declined,
+    // with numbers, instead of being banked into an entry nothing can use.
     const std::uint32_t publish_scan_pages = kv_pages_for_frontier(group.frontier);
     bool publish_private = publish_private_requested;
     bool publish_shared  = publish_shared_requested;
-    if ((publish_private || publish_shared) && text_kv_addresses != nullptr &&
-        text_kv_pages != nullptr &&
+    if (proto_host_backed_anchors() && (publish_private || publish_shared) &&
+        text_kv_addresses != nullptr && text_kv_pages != nullptr &&
+        text_kv_pages->physical_pool().usable_pages() <
+            text_kv_addresses->logical_page_capacity()) {
+        const std::uint32_t usable = text_kv_pages->physical_pool().usable_pages();
+        const std::uint32_t work   = publish_working_set_pages(usable);
+        if (publish_scan_pages + work > usable) {
+            std::fprintf(stderr,
+                         "[ninfer] anchor publish declined: frontier=%u needs=%u+workset=%u usable=%u "
+                         "(an anchor this deep could not be restored with room to work)\n",
+                         group.frontier, publish_scan_pages, work, usable);
+            publish_private = false;
+            publish_shared  = false;
+        }
+    }
+    // LOCAL PROTOTYPE (KVMem-style ring): with host-backed anchors off, keep the original rule --
+    // refuse any capture whose prefix has a Host page in it.
+    if (!proto_host_backed_anchors() && (publish_private || publish_shared) &&
+        text_kv_addresses != nullptr && text_kv_pages != nullptr &&
         text_kv_pages->physical_pool().usable_pages() <
             text_kv_addresses->logical_page_capacity()) {
         const SequenceState& seq = active_sequence(lane);

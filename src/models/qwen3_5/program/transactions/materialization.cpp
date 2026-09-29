@@ -876,18 +876,15 @@ void ProgramImpl::prepare_materialization(MaterializationTransaction& transactio
                         break;      // nothing left anywhere: the shortfall is real
                     }
                 }
+                // LOCAL FIX (restore-count): re-count AFTER the demote loop, not from the value the
+                // last round started with. The loop breaks out of a round right after demoting, so
+                // the count it recorded predates that demotion and can understate the shortfall --
+                // which is how the reservation came to be sized 140 pages short and the restore then
+                // ran out of reservation with the pool still half empty. This is the count that sizes
+                // it. It says nothing about convergence: the restore has not run yet.
                 missing = 0;
                 for (std::uint32_t page = 0; page < mapped; ++page) {
                     if (!pages.device_resident(addresses.logical_page(address, page))) { ++missing; }
-                }
-                if (missing != 0) {
-                    // The restore ran out of places to free. Say so with numbers: prepare_prefix_fork
-                    // will now report this as a typed capacity failure instead of an unnamed throw.
-                    std::fprintf(stderr,
-                                 "[ninfer] restore did not converge: missing=%u frontier_pages=%u "
-                                 "pool{usable=%u allocated=%u}\n",
-                                 missing, mapped, pages.physical_pool().usable_pages(),
-                                 pages.physical_pool().allocated_pages());
                 }
                 {
                     // LOCAL DIAGNOSTIC (restore-state): what the restore has to work with.
@@ -944,6 +941,22 @@ void ProgramImpl::prepare_materialization(MaterializationTransaction& transactio
                          restores.size() - restores_before, reservation.pages(),
                          pages.physical_pool().usable_pages(),
                          pages.physical_pool().allocated_pages());
+            {
+                // LOCAL DIAGNOSTIC (restore-converged): the real convergence check, AFTER the pages
+                // have been reserved. An earlier version of this reported "did not converge" before
+                // the restore had run at all, which fired on every restore that had any work to do
+                // and sent the reader after a failure that was not happening.
+                std::uint32_t still_missing = 0;
+                for (std::uint32_t page = 0; page < mapped; ++page) {
+                    const LogicalKVPageHandle logical = addresses.logical_page(address, page);
+                    if (pages.valid(logical) && !pages.device_resident(logical)) { ++still_missing; }
+                }
+                if (still_missing != 0) {
+                    std::fprintf(stderr,
+                                 "[ninfer] restore did NOT converge: missing=%u frontier_pages=%u\n",
+                                 still_missing, mapped);
+                }
+            }
         };
     DeviceKVPageReservation& text_restore_reservation =
         text_prefix_fork ? *transaction.text_source_restore_reservation
