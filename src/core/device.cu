@@ -41,6 +41,16 @@ void cuda_check(cudaError_t err, const char* expr, const char* file, int line) {
     if (err == cudaSuccess) { return; }
     std::fprintf(stderr, "%s:%d: CUDA_CHECK(%s) failed: %s: %s\n", file, line, expr,
                  cudaGetErrorName(err), cudaGetErrorString(err));
+    if (err == cudaErrorMemoryAllocation) {
+        // LOCAL FIX (oom-graceful): an allocation failure must not kill the engine.
+        // A failed allocation leaves the CUDA context usable, so clear the sticky
+        // error and throw: request paths convert this into a failed request while
+        // the engine keeps serving. Every other CUDA error still aborts -- a launch
+        // failure can poison the context, and fail-stop is the only safe response.
+        (void)cudaGetLastError();
+        throw std::runtime_error(cuda_error_message("CUDA out of memory", err) + " at " + file +
+                                 ":" + std::to_string(line));
+    }
     std::abort();
 }
 
