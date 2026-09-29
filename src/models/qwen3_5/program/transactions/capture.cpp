@@ -32,11 +32,16 @@ bool proto_host_backed_anchors() {
     return enabled;
 }
 
-// An anchor is only usable if it can be brought back and still leave the pool room for the
-// turn's own working set (the chunk being written plus the retrieval set plus slack). Measured
-// at 256 pages on a 147456-token pool; scaled off the pool so it tracks the configuration.
+// An anchor is only usable if it can be brought back and still leave the pool room for the turn's
+// own working set (the pages just mapped for the chunk in flight, the retrieval set, and slack).
+// Measured on a 172032-token pool (2688 pages): the deepest anchor that actually landed was 131072
+// (2048 pages), so the working set is 640 pages = 23.8% of the pool -- NOT the ~1/8 first assumed.
+// This number decides whether a deeper anchor is bankable at all, and it is what a reader of the
+// decline line will trust, so it is sized from the measurement (a quarter, less a small slack)
+// rather than from a convenient guess.
 constexpr std::uint32_t publish_working_set_pages(std::uint32_t usable_pages) {
-    return usable_pages / 8U < 64U ? 64U : usable_pages / 8U;
+    const std::uint32_t quarter = usable_pages / 4U;
+    return quarter < 96U ? 96U : quarter - 32U;
 }
 } // namespace
 
