@@ -1308,6 +1308,21 @@ public:
         out.shared_active_references = shared_references > std::numeric_limits<std::uint32_t>::max()
                                            ? std::numeric_limits<std::uint32_t>::max()
                                            : static_cast<std::uint32_t>(shared_references);
+        // LOCAL DIAGNOSTIC (catalog-growth): abandoned catalogued continuations
+        // (e.g. every cancelled turn under salvage) would show up here as a
+        // monotonically growing count while host memory climbs.
+        std::uint32_t catalogued_private = 0;
+        for (std::uint32_t slot = 0; slot < catalog_count_; ++slot) {
+            if (catalog_[slot].state == CatalogState::Catalogued) { ++catalogued_private; }
+        }
+        std::uint32_t catalogued_shared = 0;
+        for (std::uint32_t slot = 0; slot < shared_catalog_count_; ++slot) {
+            if (shared_catalog_[slot].state == SharedCatalogState::Catalogued) {
+                ++catalogued_shared;
+            }
+        }
+        out.catalogued_private_owners = catalogued_private;
+        out.catalogued_shared_owners  = catalogued_shared;
     }
 
     [[nodiscard]] CatalogState catalog_state(std::uint32_t slot) const noexcept {

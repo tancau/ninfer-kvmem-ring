@@ -1023,7 +1023,9 @@ std::string format_throughput_json(const std::string& server_instance_id, std::u
                            {"device_main_kv_pages", current.device_main_kv_occupied_pages},
                            {"device_backend_kv_pages", current.device_backend_kv_occupied_pages},
                            {"host_kv_bytes", current.host_kv_occupied_bytes},
-                           {"shared_active_references", current.shared_active_references}}},
+                           {"shared_active_references", current.shared_active_references},
+                           {"catalogued_private", current.catalogued_private_owners},
+                           {"catalogued_shared", current.catalogued_shared_owners}}},
         {"actual_transfer_seconds", monotonic_delta(previous.actual_context_transfer_seconds,
                                                     current.actual_context_transfer_seconds)}};
     return record.dump();
