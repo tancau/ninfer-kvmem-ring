@@ -1213,10 +1213,17 @@ private:
     // attention sink and, on the first pass, `preferred`) until at least `target_free` Device pages
     // have been released, or nothing more can be demoted. The content is always preserved on the
     // Host first, so demotion is lossless and retrieval can bring a page back.
+    // LOCAL FIX (spare-publishable-prefix): `spare_prefix_pages` spares logical pages [0, N) from the
+    // FIRST demotion pass, on top of the explicitly `preferred` set (which is spared but does get
+    // given up when the Device cannot supply the room). Callers use it to protect a prefix that is
+    // about to be published: a capture can only be banked while every page below its frontier is
+    // Device-resident, and demotion ran oldest-first, so it consumed exactly that prefix. The second
+    // pass still yields the prefix, so the caller's room guarantee is unchanged.
     std::uint32_t demote_kv_pages_to_host(KVAddressSpaceStore& addresses, LogicalKVPageStore& pages,
                                           const KVAddressSpaceHandle& address,
                                           std::uint32_t sink_pages, std::uint32_t target_free,
-                                          std::span<const std::uint32_t> preferred);
+                                          std::span<const std::uint32_t> preferred,
+                                          std::uint32_t spare_prefix_pages = 0U);
     // LOCAL PROTOTYPE (KVMem-style ring): release Device pages held by OTHER (inactive) addresses
     // until `target_free` more Device pages are free. Inactive addresses are pure cache in ring mode
     // (reuse of a host-demoted source is declined), so their Device replicas can go without affecting

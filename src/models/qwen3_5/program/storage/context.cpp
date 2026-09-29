@@ -1553,11 +1553,13 @@ std::uint32_t ProgramImpl::demote_kv_pages_to_host(KVAddressSpaceStore& addresse
                                                    const KVAddressSpaceHandle& address,
                                                    std::uint32_t sink_pages,
                                                    std::uint32_t target_free,
-                                                   std::span<const std::uint32_t> preferred) {
+                                                   std::span<const std::uint32_t> preferred,
+                                                   std::uint32_t spare_prefix_pages) {
     if (host_kv_extents == nullptr || !addresses.valid(address) || target_free == 0) { return 0; }
     const std::uint32_t mapped = addresses.mapped_pages(address);
     const auto is_preferred = [&](std::uint32_t page) {
-        return !preferred.empty() && std::binary_search(preferred.begin(), preferred.end(), page);
+        return page < spare_prefix_pages ||
+               (!preferred.empty() && std::binary_search(preferred.begin(), preferred.end(), page));
     };
     // Oldest first, skipping the attention sink and (in the first pass) the pages retrieval wants to
     // keep. If that is not enough the second pass gives up the retrieved pages too, so the caller is
@@ -1831,7 +1833,8 @@ void ProgramImpl::ensure_sequence_kv_mapped(SequenceState& sequence, std::uint32
         };
         const auto ring_one = [&](KVAddressSpaceStore& addresses, LogicalKVPageStore& pages,
                                   const KVAddressSpaceHandle& address, std::uint32_t total,
-                                  std::span<const std::uint32_t> prefer) {
+                                  std::span<const std::uint32_t> prefer,
+                                  std::uint32_t spare_prefix) {
             const std::uint32_t mapped = addresses.mapped_pages(address);
             const std::uint32_t need   = total > mapped ? total - mapped : 0U;
             std::uint32_t wanted_extra = 0;
@@ -1852,9 +1855,10 @@ void ProgramImpl::ensure_sequence_kv_mapped(SequenceState& sequence, std::uint32
                 const std::uint32_t free_after = free_pages(pages);
                 const std::uint32_t target2 = want_free > free_after ? want_free - free_after : 0U;
                 (void)demote_kv_pages_to_host(addresses, pages, address, sink_pages, target2,
-                                              prefer);
+                                              prefer, spare_prefix);
             } else {
-                (void)demote_kv_pages_to_host(addresses, pages, address, sink_pages, 0U, prefer);
+                (void)demote_kv_pages_to_host(addresses, pages, address, sink_pages, 0U, prefer,
+                                              spare_prefix);
             }
         };
         // Retrieval preference: a quarter of the pool at most, scored on the whole mapped range.
@@ -1881,10 +1885,27 @@ void ProgramImpl::ensure_sequence_kv_mapped(SequenceState& sequence, std::uint32
         preferred.erase(std::remove_if(preferred.begin(), preferred.end(),
                                        [&](std::uint32_t page) { return page >= mapped_now; }),
                         preferred.end());
-        ring_one(*text_kv_addresses, *text_kv_pages, sequence.kv->text, text_total, preferred);
+        // LOCAL FIX (spare-publishable-prefix): a capture can only be banked while every page below
+        // its frontier is Device-resident, and demotion runs oldest-first -- so it consumed exactly
+        // the publishable prefix and left reuse stuck at the first frontier reached before the pool
+        // filled (measured: 98304 of a 147456 pool; deeper frontiers were declined). Spare
+        // [0, deepest pending capture) in the first demotion pass so the ring spills the pages AFTER
+        // it. Captures are offered when the cursor reaches their frontier and the groups are sorted
+        // ascending, so protecting the deepest one protects every shallower one as well. The second
+        // pass still yields the prefix, so the room guarantee is unchanged.
+        std::uint32_t publishable_prefix_pages = 0;
+        if (sequence.lane < max_concurrency && requests[sequence.lane].prefill) {
+            const RequestControl::Prefill& prefill = *requests[sequence.lane].prefill;
+            if (prefill.next_capture < prefill.capture_groups.size()) {
+                publishable_prefix_pages =
+                    proto_pages_for_tokens(prefill.capture_groups.back().frontier);
+            }
+        }
+        ring_one(*text_kv_addresses, *text_kv_pages, sequence.kv->text, text_total, preferred,
+                 publishable_prefix_pages);
         if (has_backend) {
             ring_one(*backend_kv_addresses, *backend_kv_pages, *sequence.kv->backend, backend_total,
-                     {});
+                     {}, publishable_prefix_pages);
         }
     }
     text_kv_addresses->ensure_mapped_to_tokens(sequence.kv->text, main_tokens, device.stream);

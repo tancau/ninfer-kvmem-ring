@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -1951,6 +1952,32 @@ private:
     // The worker holds execution_mutex_ across the failing operation and this cleanup, so no
     // Program introspection can observe a partially cleared physical state.
     void fail_all_locked(std::exception_ptr error) noexcept {
+        // LOCAL FIX (fail-all-naming): this is the only place the Engine decides to give up on
+        // every request at once, and it used to do so silently -- an escaping non-std exception
+        // left no line anywhere, so a production death could not be attributed to anything. Name
+        // the failure before tearing down, and say whether it was a typed KV-pool exhaustion (which
+        // the transaction layer is supposed to have contained per request).
+        const char* kind      = "unknown";
+        std::string what_text;
+        if (error) {
+            try {
+                std::rethrow_exception(error);
+            } catch (const ninfer::ContextCacheExhausted&) {
+                kind = "ContextCacheExhausted";
+            } catch (const std::bad_alloc&) {
+                kind = "bad_alloc";
+            } catch (const std::exception& e) {
+                kind = "std::exception";
+                what_text = e.what();
+            } catch (...) {
+                kind = "non-standard";
+            }
+        }
+        std::fprintf(stderr,
+                     "[ninfer] engine-wide failure: kind=%s what=%s "
+                     "(all in-flight requests failed; the Engine will not recover)\n",
+                     kind, what_text.empty() ? "-" : what_text.c_str());
+        std::fflush(stderr);
         std::deque<std::shared_ptr<Request>> pending;
         {
             std::lock_guard lock(queue_mutex_);

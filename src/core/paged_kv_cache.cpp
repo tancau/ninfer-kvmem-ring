@@ -357,6 +357,22 @@ void DeviceKVPagePool::resize_reservation(DeviceKVPageReservation& reservation,
     reservation.pages_ = new_reserved_pages;
 }
 
+// LOCAL FIX (typed-pool-exhaustion): the Device pool running dry is a *capacity* condition that the
+// transaction layer knows how to contain (ContextCacheExhausted -> one request fails with
+// Overloaded, the Engine keeps serving). Throwing std::logic_error / std::invalid_argument instead
+// escaped every one of those handlers and reached the Engine's catch(...), which fails ALL requests
+// and leaves the process wedged. These two conditions are capacity, not contract violations: report
+// them as the typed error and keep the pool numbers in the message so the log names the shortfall.
+namespace {
+std::string pool_exhaustion(const char* site, std::uint32_t need, std::uint32_t usable,
+                            std::uint32_t allocated, std::uint32_t reserved,
+                            std::uint32_t reservation) {
+    return std::string("Device KV pool exhausted at ") + site + ": need=" + std::to_string(need) +
+           " usable=" + std::to_string(usable) + " allocated=" + std::to_string(allocated) +
+           " reserved=" + std::to_string(reserved) + " reservation=" + std::to_string(reservation);
+}
+} // namespace
+
 void DeviceKVPagePool::materialize(DeviceKVPageReservation& reservation,
                                    std::uint32_t target_page_count,
                                    std::vector<DeviceKVPageLease>& destination,
@@ -381,7 +397,9 @@ void DeviceKVPagePool::materialize(DeviceKVPageReservation& reservation,
                      "[diag] materialize-batch FAIL count=%u usable=%u allocated=%u reserved=%u "
                      "reservation=%u\n",
                      count, usable_pages(), allocated_pages_, reserved_pages_, reservation.pages_);
-        throw std::logic_error("Paged KV reservation invariant was violated");
+        throw ContextCacheExhausted(pool_exhaustion("materialize-batch", count, usable_pages(),
+                                                    allocated_pages(), reserved_pages_,
+                                                    reservation.pages_));
     }
 
     std::optional<std::int32_t> preferred;
@@ -461,14 +479,18 @@ DeviceKVPageLease DeviceKVPagePool::materialize_one(DeviceKVPageReservation& res
                      "allocated=%u free_runs=%zu\n",
                      tag, reservation.pages_, usable_pages(), allocated_pages_,
                      free_page_runs_.size());
-        throw std::invalid_argument("Paged KV single-page materialization exceeds reservation");
+        throw ContextCacheExhausted(pool_exhaustion("materialize-one/reservation", 1, usable_pages(),
+                                                    allocated_pages(), reserved_pages_,
+                                                    reservation.pages_));
     }
     if (free_page_runs_.empty()) {
         std::fprintf(stderr,
                      "[diag] materialize-one FAIL tag=%s usable=%u allocated=%u reserved=%u "
                      "reservation=%u\n",
                      tag, usable_pages(), allocated_pages_, reserved_pages_, reservation.pages_);
-        throw std::logic_error("Paged KV reservation invariant was violated");
+        throw ContextCacheExhausted(pool_exhaustion("materialize-one/pool", 1, usable_pages(),
+                                                    allocated_pages(), reserved_pages_,
+                                                    reservation.pages_));
     }
     KVPageRun& run        = free_page_runs_.front();
     const std::int32_t page = run.begin++;
