@@ -110,7 +110,39 @@ depth_pages = pool_pages − working_set_pages
 
 ---
 
-## 4. 结论三：失败类型错配 —— 池取不到页时杀的是引擎，不是请求
+## 4. 结论三：进程死因已从"池耗尽"改判为 **fail-fast**
+
+`docs/maintainer` 旧结论与本文 §6 的第一版都把死因写成"池耗尽"。**实测推翻了这个结论。**
+
+忠实复现（`repro_shape.py`：87 消息 / 33 工具 / 151,908 token / 取消后重试）在 T2
+第 353 秒杀死引擎，监督器读到：
+
+```
+DEATH pid=9372 exit_code=0xC0000409 uptime=1338s
+VERDICT: NTSTATUS exception 0xC0000409
+```
+
+排除法：
+
+| 候选 | 判定 | 依据 |
+|---|---|---|
+| 外部杀 / wedge | **排除** | `is_available()` 只影响 503，进程不会消失 |
+| `std::terminate` | **排除** | `apps/serve/main.cpp:45-56` 装了 handler，会打印 `NINFER-CRASH` 并 `exit 42`；实测无该行、码不是 42 |
+| 未处理结构化异常 | **排除** | `main.cpp:65-72` 的 SEH 过滤器会打印并退 43 |
+| `device.cu:54` `cuda_check` abort | **排除** | `device.cu:42` 先打印 file:line + CUDA 错误名才 abort，日志里没有 |
+| `generation_budget.h:16` | **排除** | `request_plan.cpp:246-248` 的 `effective_limit_reason` 恒为 OutputLimit/ContextCapacity |
+| `generation_budget.h:25` | **排除** | `commit()` 只在解码提交路径（`engine_core.h:1252,1942`），死亡发生在 prefill |
+| **裸 `abort()` / `/GS` 栈 cookie 破坏** | **剩余候选** | 两者都产生 0xC0000409 且绕过全部 handler |
+
+`0xC0000409` 是 `__fastfail`。剩余两种来源：
+`FAST_FAIL_FATAL_APP_EXIT`（`abort()`，值 0）与
+`FAST_FAIL_STACK_COOKIE_CHECK_FAILURE`（`/GS` 检出栈越界，值 3）。
+**dump 的 `ExceptionInformation[0]` 直接分辨这两个**。
+
+顺带修正一个假线索：此前"没有 dump"被当成崩溃不产生 dump。真相是
+**磁盘只剩 21.24 GB，而 full dump 需要 ~23 GB**，两个陈旧 dump 占着 48.8 GB。
+已清理，并把 `LocalDumps\ninfer-serve.exe` 的 `DumpType` 从 2（full）改为 1（minidump），
+现在剩 66.65 GB。
 
 池耗尽时抛的是 **untyped** 异常：
 
@@ -177,8 +209,21 @@ C 几乎零风险且立刻让死亡可归因；A 是当前收益最大的一刀�
 
 ---
 
-## 7. 待确认（正在采集）
+## 7. 已落地 / 待确认
 
-- 监督器退出码 → "进程消失"的真实路径（wedge 已被排除，剩下 terminate 或外部终止）
-- `mem-prod.csv` 内存曲线 → 32G 是否参与
-- `repro_shape.py` T2 → 是否复现生产形状的死亡
+已落地（`618cf7b`）：
+
+- **C**：`core/paged_kv_cache.cpp` 两处池耗尽改为 typed `ContextCacheExhausted`；
+  `engine_core.h fail_all_locked` 打印 `kind=` + `what=`。今后池耗尽是单请求失败且有名字。
+- **A**：`demote_kv_pages_to_host` 新增 `spare_prefix_pages`，第一遍降级跳过
+  `[0, 最深待发布 capture)`；`ensure_sequence_kv_mapped` 从
+  `requests[sequence.lane].prefill->capture_groups.back().frontier` 算出该前缀。
+
+待确认：
+
+- `618cf7b` 上重跑 `repro_shape.py`（约 20 分钟）→ 死亡是否消失、`publish declined`
+  是否让位给更深的 `capture install`、`hit` 是否超过 98,304。
+- 若仍死 → minidump 的 `ExceptionInformation[0]`：3 = `/GS` 栈越界（内存安全缺陷），
+  0 = 裸 `abort()`。
+- `mem-prod.csv` 内存曲线 → 32G 是否参与（当前观测 WorkingSet 峰值仅 ~3.2 GB，
+  Private 基线 22.7 GB 是 arena 预留，未见无界增长）。

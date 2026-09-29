@@ -56,6 +56,45 @@ void ninfer_terminate_handler() {
 }
 
 #if defined(_WIN32)
+#    if defined(NINFER_CRASH_SYMBOLS)
+#        include <dbghelp.h>
+#    endif
+// LOCAL DIAG (sigabrt-tap): production deaths exit with 0xC0000409, print no crash line and
+// produce no dump -- the terminate handler and the SEH filter are both bypassed, which is the
+// signature of a direct __fastfail. Two sources remain: a bare abort() in our code
+// (FAST_FAIL_FATAL_APP_EXIT) and a /GS stack-cookie failure. abort() raises SIGABRT before it
+// terminates, so tapping SIGABRT answers which one it is, and the frames say where.
+void ninfer_sigabrt_handler(int) {
+    void*  frames[32];
+    const USHORT captured = CaptureStackBackTrace(0, 32, frames, nullptr);
+#    if defined(NINFER_CRASH_SYMBOLS)
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_LOAD_LINES | SYMOPT_DEFERRED_LOADS);
+    (void)SymInitialize(GetCurrentProcess(), nullptr, TRUE);
+#    endif
+    std::fprintf(stderr, "NINFER-CRASH kind=SIGABRT frames=%u\n", static_cast<unsigned>(captured));
+    for (USHORT i = 0; i < captured; ++i) {
+        const auto address = reinterpret_cast<std::uintptr_t>(frames[i]);
+#    if defined(NINFER_CRASH_SYMBOLS)
+        alignas(SYMBOL_INFO) char        buffer[sizeof(SYMBOL_INFO) + 512];
+        SYMBOL_INFO* info  = reinterpret_cast<SYMBOL_INFO*>(buffer);
+        info->SizeOfStruct = sizeof(SYMBOL_INFO);
+        info->MaxNameLen   = 511;
+        DWORD64            displacement = 0;
+        if (SymFromAddr(GetCurrentProcess(), static_cast<DWORD64>(address), &displacement, info)) {
+            std::fprintf(stderr, "  frame[%02u] %p  %s +0x%llx\n", static_cast<unsigned>(i), frames[i],
+                         info->Name, static_cast<unsigned long long>(displacement));
+        } else {
+            std::fprintf(stderr, "  frame[%02u] %p  <no symbol>\n", static_cast<unsigned>(i), frames[i]);
+        }
+#    else
+        std::fprintf(stderr, "  frame[%02u] %p\n", static_cast<unsigned>(i), frames[i]);
+#    endif
+    }
+    std::fflush(stderr);
+    std::fflush(stdout);
+    std::_Exit(44);
+}
+
 void ninfer_invalid_parameter_handler(const wchar_t*, const wchar_t*, const wchar_t*, unsigned int,
                                       uintptr_t) {
     crash_line("invalid_parameter", "");
@@ -77,6 +116,7 @@ LONG WINAPI ninfer_unhandled_exception_filter(EXCEPTION_POINTERS* info) {
 int main(int argc, char** argv) {
     std::set_terminate(ninfer_terminate_handler);
 #if defined(_WIN32)
+    signal(SIGABRT, ninfer_sigabrt_handler);
     _set_invalid_parameter_handler(ninfer_invalid_parameter_handler);
     SetUnhandledExceptionFilter(ninfer_unhandled_exception_filter);
 #endif

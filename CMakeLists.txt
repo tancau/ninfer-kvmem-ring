@@ -26,6 +26,15 @@ endif()
 option(NINFER_BUILD_APPS "Build the NInfer CLI, server and perplexity evaluator" ON)
 option(BUILD_TESTING "Build NInfer tests" OFF)
 option(NINFER_BUILD_BENCHMARKS "Build NInfer benchmarks" OFF)
+# LOCAL DIAG (crash-symbols): a production death exits 0xC0000409 through a bare abort() with no
+# log line, no dump and no traceback -- only raw return addresses. Turning this ON compiles debug
+# info and links dbghelp into the server so the SIGABRT handler in apps/serve/main.cpp prints
+# module!function+offset. OFF by default: it grows the binary and lengthens every build.
+option(NINFER_CRASH_SYMBOLS "Build ninfer-serve with debug info + dbghelp crash symbolization" OFF)
+if(NINFER_CRASH_SYMBOLS AND MSVC)
+  add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/Zi>)
+  add_link_options(/DEBUG)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
