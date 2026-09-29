@@ -2,6 +2,7 @@
 
 #include "core/host_kv_arena.h"
 #include "core/paged_kv_cache.h"
+#include "ninfer/types.h"
 
 #include <algorithm>
 #include <array>
@@ -1078,7 +1079,28 @@ public:
             if (!pages_->device_resident(logical) ||
                 pages_->committed_columns(logical) < required || !pages_->can_pin_source(logical) ||
                 (page < full_pages && !pages_->can_retain_reference(logical, false))) {
-                throw std::logic_error("KV retained-prefix source is not stable");
+                // LOCAL FIX (typed-retain-fork): in ring mode the retained prefix is restored from
+                // the Host H2D before this fork, and that restore is best-effort -- it has a bounded
+                // number of rounds and demotes for room only opportunistically. So "the prefix is
+                // not fully Device-resident yet" is an ordinary capacity outcome that the restore
+                // could not satisfy, not a broken contract. Throwing std::logic_error here escaped
+                // every transaction-layer handler and reached the Engine's catch(...), failing all
+                // requests with no log line -- the same defect class as the pool-exhaustion paths.
+                // Report it as the typed capacity error so this request fails and the Engine keeps
+                // serving, and name the page so a bank-miss is attributable.
+                std::fprintf(stderr,
+                             "[ninfer] retained-prefix fork declined: page=%u of %u frontier=%u "
+                             "device=%d columns=%u/%u pinnable=%d retainable=%d\n",
+                             page, required_pages, frontier,
+                             pages_->device_resident(logical) ? 1 : 0,
+                             pages_->committed_columns(logical), required,
+                             pages_->can_pin_source(logical) ? 1 : 0,
+                             (page < full_pages && !pages_->can_retain_reference(logical, false))
+                                 ? 0
+                                 : 1);
+                throw ContextCacheExhausted("retained KV prefix is not Device-resident after the "
+                                            "Host restore; page " + std::to_string(page) + " of " +
+                                            std::to_string(required_pages));
             }
         }
 

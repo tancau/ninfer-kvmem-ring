@@ -836,12 +836,15 @@ void ProgramImpl::prepare_materialization(MaterializationTransaction& transactio
             // reuse frontier -- that tail is recomputed on reuse and may legitimately
             // hold most of the pool (observed: 945 of 1500 pages).
             if (missing != 0) {
-                (void)demote_other_addresses_to_host(addresses, pages, address, missing);
-                // Demote this address's tail (beyond the reuse frontier) until the pool
-                // has room for the whole restore. The demote's second pass may also drop
-                // pages inside the reuse range, which grows the requirement, so re-count
-                // and repeat until the free room covers the count (bounded, best effort).
-                for (int round = 0; round < 8; ++round) {
+                // LOCAL FIX (restore-converge): draining OTHER (inactive) addresses is the only
+                // demotion that does not fight the restore -- this address's reuse range IS what we
+                // are bringing back, so demoting it just moves the shortfall elsewhere. It used to
+                // run once before the loop and never again, so every later round had nothing left
+                // but to cannibalise the very pages it was restoring. Drain first, every round; fall
+                // back to demoting our own tail (and only then our reuse range) when there is
+                // nothing left to drain. Bounded, and non-convergence is now reported instead of
+                // being handed to prepare_prefix_fork as an unnamed std::logic_error.
+                for (int round = 0; round < 16; ++round) {
                     std::uint32_t need = 0;
                     for (std::uint32_t page = 0; page < mapped; ++page) {
                         if (!pages.device_resident(addresses.logical_page(address, page))) {
@@ -860,16 +863,31 @@ void ProgramImpl::prepare_materialization(MaterializationTransaction& transactio
                     // to go.
                     constexpr std::uint32_t kRestoreSlackPages = 16U;
                     if (missing == 0 || free_now >= missing + kRestoreSlackPages) { break; }
+                    const std::uint32_t want = missing + kRestoreSlackPages - free_now;
+                    if (demote_other_addresses_to_host(addresses, pages, address, want) != 0) {
+                        continue;   // other addresses yielded room; re-count before touching our own
+                    }
                     std::vector<std::uint32_t> keep_head;
                     keep_head.reserve(mapped);
                     for (std::uint32_t page = 0; page < mapped; ++page) {
                         keep_head.push_back(page);
                     }
-                    if (demote_kv_pages_to_host(addresses, pages, address, 0U,
-                                                missing + kRestoreSlackPages - free_now,
-                                                keep_head) == 0) {
-                        break;
+                    if (demote_kv_pages_to_host(addresses, pages, address, 0U, want, keep_head) == 0) {
+                        break;      // nothing left anywhere: the shortfall is real
                     }
+                }
+                missing = 0;
+                for (std::uint32_t page = 0; page < mapped; ++page) {
+                    if (!pages.device_resident(addresses.logical_page(address, page))) { ++missing; }
+                }
+                if (missing != 0) {
+                    // The restore ran out of places to free. Say so with numbers: prepare_prefix_fork
+                    // will now report this as a typed capacity failure instead of an unnamed throw.
+                    std::fprintf(stderr,
+                                 "[ninfer] restore did not converge: missing=%u frontier_pages=%u "
+                                 "pool{usable=%u allocated=%u}\n",
+                                 missing, mapped, pages.physical_pool().usable_pages(),
+                                 pages.physical_pool().allocated_pages());
                 }
                 {
                     // LOCAL DIAGNOSTIC (restore-state): what the restore has to work with.
