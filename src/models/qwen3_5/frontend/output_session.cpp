@@ -5,6 +5,7 @@
 #include "text/unicode.h"
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -569,10 +570,50 @@ runtime::OutputDecision OutputSession::preview_control(std::span<const TokenId> 
                          impl_->preview_output, static_cast<std::uint32_t>(index + 1), nullptr);
     }
     if (impl_->preview_semantic.in_reasoning) {
-        throw std::logic_error("canonical thinking control did not close the thinking phase");
+        // LOCAL FIX (thinking-control-refusal): the canonical control suffix did not close the
+        // thinking phase, so the model will not take the "stop reasoning and answer now" handoff.
+        // This used to throw std::logic_error, which no transaction-layer handler catches: it
+        // reached the Engine's catch(...) and failed EVERY request, so a run that merely exhausted
+        // its thinking budget ended the whole conversation. Observed twice in 198 requests, both
+        // times as a dead turn.
+        //
+        // A thinking budget is a LIMIT, so hitting it should end the turn, not the process. Refuse
+        // the control, keep whatever reasoning and content were already produced, and finish with
+        // OutputLimit so the client sees an honest reason and the engine keeps serving. The
+        // diagnostic names the budget and the thinking count so a run where the model consistently
+        // refuses the handoff is visible instead of silent.
+        std::fprintf(stderr,
+                     "[ninfer] thinking control refused: model did not close the thinking phase "
+                     "(budget=%u thinking_tokens=%u control_tokens=%zu) -- finishing the turn with "
+                     "OutputLimit instead of ending the request\n",
+                     *impl_->preview_semantic.budget, impl_->preview_semantic.model_thinking_tokens,
+                     tokens.size());
+        std::fflush(stderr);
+        impl_->preview_semantic.control_pending = false;
+        impl_->preview_semantic.applied         = true;
+        terminalize(impl_->preview_state, impl_->policy, impl_->preview_output, 0);
+        impl_->preview_ready = true;
+        return runtime::OutputDecision{
+            .accepted_tokens = static_cast<std::uint32_t>(tokens.size()),
+            .finish_reason   = FinishReason::OutputLimit,
+        };
     }
     if (impl_->split_reasoning && impl_->preview_state.in_reasoning) {
-        throw std::logic_error("canonical thinking control did not close the reasoning channel");
+        // Same refusal, same consequence: a split channel that will not close is a limit reached,
+        // not a broken contract.
+        std::fprintf(stderr,
+                     "[ninfer] thinking control refused: reasoning channel did not close "
+                     "(budget=%u thinking_tokens=%u) -- finishing the turn with OutputLimit\n",
+                     *impl_->preview_semantic.budget, impl_->preview_semantic.model_thinking_tokens);
+        std::fflush(stderr);
+        impl_->preview_semantic.control_pending = false;
+        impl_->preview_semantic.applied         = true;
+        terminalize(impl_->preview_state, impl_->policy, impl_->preview_output, 0);
+        impl_->preview_ready = true;
+        return runtime::OutputDecision{
+            .accepted_tokens = static_cast<std::uint32_t>(tokens.size()),
+            .finish_reason   = FinishReason::OutputLimit,
+        };
     }
     impl_->preview_semantic.control_pending = false;
     impl_->preview_semantic.applied         = true;
