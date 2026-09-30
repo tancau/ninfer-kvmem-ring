@@ -2026,6 +2026,13 @@ private:
             }
 
             std::unique_lock execution_lock(execution_mutex_);
+            // LOCAL DIAG (fail-all-attribution): the worker gives up on every request when an
+            // exception escapes a unit, and it used to record nothing about WHICH unit or WHICH
+            // lane. Without that, an engine-wide failure is unattributable -- which is exactly how
+            // the silent deaths stayed unattributed for nine occurrences. This marker is the
+            // prerequisite for containing a failure to its own lane instead of failing all of them.
+            const char* unit_kind = "control";
+            std::string  unit_lanes = "none";
             try {
                 set_host_work_class(HostWorkClass::Control);
                 HostPhaseMeasurement boundary = begin_host_phase();
@@ -2078,6 +2085,13 @@ private:
                 if (action == ExecutionAction::Prefill) {
                     set_host_work_class(HostWorkClass::Prefill);
                     finish_engine_phase(boundary, EngineHostPhase::Boundary);
+                    unit_kind = "prefill";
+                    if (const auto lane = scheduler_.prefill_lane(); lane) {
+                        unit_lanes = "prefill_lane=" +
+                                     std::to_string(static_cast<std::uint32_t>(*lane));
+                    } else {
+                        unit_lanes = "prefill_lane=none";
+                    }
                     run_prefill_step(cancelled_at_unit_start);
                     previous_unit_was_decode = false;
                     continue;
@@ -2085,6 +2099,12 @@ private:
                 if (action == ExecutionAction::Decode) {
                     set_host_work_class(HostWorkClass::Decode, membership.lane_span());
                     finish_engine_phase(boundary, EngineHostPhase::Boundary);
+                    unit_kind = "decode";
+                    unit_lanes = "decode_lanes=";
+                    for (const std::uint32_t lane : membership.lane_span()) {
+                        if (unit_lanes.back() != '=') { unit_lanes.push_back(','); }
+                        unit_lanes += std::to_string(lane);
+                    }
                     run_decode_round(membership, cancelled_at_unit_start);
                     previous_unit_was_decode = true;
                     continue;
@@ -2093,6 +2113,13 @@ private:
                 finish_engine_phase(boundary, EngineHostPhase::Boundary);
             } catch (...) {
                 const std::exception_ptr error = std::current_exception();
+                // LOCAL DIAG (fail-all-attribution): name the unit and the lane the failure escaped
+                // from, so the next engine-wide failure says where it came from instead of only
+                // what it was. See the declaration above the try for why this exists. The lane is
+                // described by the unit itself because membership lives inside the try block.
+                std::fprintf(stderr, "[ninfer] engine unit failed: unit=%s %s\n", unit_kind,
+                             unit_lanes.c_str());
+                std::fflush(stderr);
                 HostPhaseMeasurement cleanup   = begin_host_phase();
                 fail_all_locked(error);
                 finish_engine_phase(cleanup, EngineHostPhase::Maintenance);
