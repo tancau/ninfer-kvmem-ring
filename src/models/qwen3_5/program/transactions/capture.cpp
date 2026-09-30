@@ -32,16 +32,21 @@ bool proto_host_backed_anchors() {
     return enabled;
 }
 
-// An anchor is only usable if it can be brought back and still leave the pool room for the turn's
-// own working set (the pages just mapped for the chunk in flight, the retrieval set, and slack).
-// Measured on a 172032-token pool (2688 pages): the deepest anchor that actually landed was 131072
-// (2048 pages), so the working set is 640 pages = 23.8% of the pool -- NOT the ~1/8 first assumed.
-// This number decides whether a deeper anchor is bankable at all, and it is what a reader of the
-// decline line will trust, so it is sized from the measurement (a quarter, less a small slack)
-// rather than from a convenient guess.
+// An anchor is only worth banking if reusing it leaves the pool room for the rest of the turn.
+// That room is DERIVED, not read off a failure: the retrieval set that comes back H2D
+// (NINFER_KV_RETRIEVE = 12288 tokens = 192 pages, capped at pool/4), the prefill chunk in flight
+// (--prefill-chunk, default 1024 tokens = 16 pages), the ring's own slack (8 pages) and the tail COW
+// a prefix fork needs (1 page) -- 217 pages, rounded to 256.
+//
+// Do NOT calibrate this against "how deep did an anchor actually land". That is circular: the gate
+// is what sets the depth, so the leftover looks exactly like a working set and the constant drifts up
+// to match it. An earlier version did precisely that (assumed 336, then "measured" 640) and pinned
+// reuse at 131,072 on a pool that had room for 147,456. Size it from what the turn needs, then test.
 constexpr std::uint32_t publish_working_set_pages(std::uint32_t usable_pages) {
-    const std::uint32_t quarter = usable_pages / 4U;
-    return quarter < 96U ? 96U : quarter - 32U;
+    constexpr std::uint32_t kDerivedReservePages = 256U;
+    constexpr std::uint32_t kMinimumReservePages = 32U;
+    return usable_pages < kDerivedReservePages + kMinimumReservePages ? kMinimumReservePages
+                                                                      : kDerivedReservePages;
 }
 } // namespace
 
