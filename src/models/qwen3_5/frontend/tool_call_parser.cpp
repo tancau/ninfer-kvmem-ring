@@ -644,7 +644,19 @@ ToolCallOutputDecoder::ToolCallOutputDecoder(std::shared_ptr<const ToolCallOutpu
 }
 
 std::string ToolCallOutputDecoder::feed(std::string_view text) {
-    if (finished_) { throw std::logic_error("tool-call output decoder is already finished"); }
+    if (finished_) {
+        // LOCAL FIX (tool-decoder-after-finish): text arriving after the decoder finished used to
+        // throw std::logic_error -- untyped, so it reached the Engine's catch(...) and failed every
+        // in-flight request. A malformed tool call is exactly the kind of model output that can
+        // desynchronise this, and a broken tool call must not be able to take the process down.
+        // The decoder has already published its result; the extra text has nowhere to go, so drop
+        // it and say so.
+        std::fprintf(stderr,
+                     "[ninfer] tool-call decoder fed after finish: dropping %zu bytes\n",
+                     text.size());
+        std::fflush(stderr);
+        return {};
+    }
     if (text.empty()) { return {}; }
     if (!contract_) { return std::string(text); }
     if (saw_tool_marker_) {

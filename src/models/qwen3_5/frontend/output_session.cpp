@@ -382,15 +382,13 @@ PublishedOutput& PublishedOutput::operator=(PublishedOutput&& other) noexcept {
 }
 
 void PublishedOutput::clear() noexcept {
-    for (std::size_t index = 0; index < size_; ++index) { values_[index] = {}; }
+    values_.clear();
     size_ = 0;
 }
 
 void PublishedOutput::push_back(OutputDelta value) {
-    if (size_ == values_.size()) {
-        throw std::logic_error("output decoder produced more than two channel transitions");
-    }
-    values_[size_++] = std::move(value);
+    values_.push_back(std::move(value));
+    size_ = values_.size();
 }
 
 OutputSession::OutputSession() noexcept                           = default;
@@ -414,7 +412,18 @@ runtime::OutputDecision OutputSession::preview_model(std::span<const TokenId> to
     if (impl_->state.terminal) { throw std::logic_error("output session is already terminal"); }
     if (impl_->preview_ready) { throw std::logic_error("output session already has a preview"); }
     if (impl_->semantic.control_pending) {
-        throw std::logic_error("model output cannot advance while thinking control is pending");
+        // LOCAL FIX (thinking-control-abandoned): the Engine asked for ordinary model tokens while
+        // a control handoff was still pending. That used to throw std::logic_error, which reaches
+        // the Engine's catch(...) and fails every request. Nothing is wrong with the model here --
+        // the budget has already been enforced up to this point -- so drop the pending control and
+        // decode normally. feed_semantic_thinking clears the same flag when the model closes the
+        // thinking phase, so this matches a path that already existed.
+        std::fprintf(stderr,
+                     "[ninfer] thinking control abandoned: model output advanced while a control "
+                     "handoff was pending (thinking_tokens=%u) -- decoding normally\n",
+                     impl_->semantic.model_thinking_tokens);
+        std::fflush(stderr);
+        impl_->semantic.control_pending = false;
     }
     if (tokens.empty()) {
         throw std::invalid_argument("cannot preview an empty generated-token round");
@@ -464,7 +473,19 @@ runtime::OutputDecision OutputSession::preview_model(std::span<const TokenId> to
             ++impl_->preview_semantic.model_thinking_tokens;
             if (impl_->preview_semantic.budget &&
                 impl_->preview_semantic.model_thinking_tokens > *impl_->preview_semantic.budget) {
-                throw std::logic_error("model output exceeded the licensed thinking budget");
+                // LOCAL FIX (thinking-budget-overshoot): the model produced more thinking tokens
+                // than the budget licenses. This threw std::logic_error, i.e. an untyped exception
+                // that reached the Engine's catch(...) and failed every in-flight request, so a
+                // runaway turn took the whole process with it. A budget is a limit: reaching it
+                // ends THIS turn. Keep everything produced so far and finish with OutputLimit so
+                // the client sees an honest reason and the engine keeps serving.
+                std::fprintf(stderr,
+                             "[ninfer] thinking budget exceeded: budget=%u produced=%u -- "
+                             "finishing the turn with OutputLimit\n",
+                             *impl_->preview_semantic.budget,
+                             impl_->preview_semantic.model_thinking_tokens);
+                std::fflush(stderr);
+                return complete(count, FinishReason::OutputLimit);
             }
             feed_semantic_thinking(impl_->preview_semantic, decoded.bytes);
         }
@@ -508,7 +529,12 @@ runtime::OutputDecision OutputSession::preview_model(std::span<const TokenId> to
         return complete(count, limit_reason);
     }
     if (impl_->preview_semantic.in_reasoning && impl_->preview_semantic.budget &&
-        impl_->preview_semantic.model_thinking_tokens == *impl_->preview_semantic.budget) {
+        // LOCAL FIX (budget-fuse-ge): this compared with ==, so once the counter had gone past the
+        // budget -- which is exactly what the overshoot path above sees -- the fuse could never fire
+        // again and the model was free to think forever. That is the runaway: 16,000 thinking
+        // tokens against a 24,576 budget, and the fuse that was supposed to stop it was silently
+        // disarmed. >= re-arms it for any round that lands on or past the limit.
+        impl_->preview_semantic.model_thinking_tokens >= *impl_->preview_semantic.budget) {
         impl_->preview_semantic.control_pending = true;
         return complete(count, FinishReason::None, runtime::ContinuationAction::ApplyTargetControl);
     }
