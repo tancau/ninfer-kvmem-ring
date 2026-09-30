@@ -274,7 +274,20 @@ public:
 
     [[nodiscard]] LogicalKVPageHandle materialize(DeviceKVPageReservation& reservation) {
         if (free_count_ == 0) {
-            throw std::logic_error("logical KV descriptors exhausted before physical capacity");
+            // The descriptor table ran dry before the physical pool did. That is a capacity
+            // condition decided by how large the conversation grew, not a broken invariant, so it
+            // reports as ContextCacheExhausted -- which derives from std::bad_alloc and therefore
+            // fails only this request instead of reaching the Engine's catch(...) and taking every
+            // in-flight request with it. Same reasoning as the Device KV pool exhaustion already
+            // typed in core/paged_kv_cache.cpp; the numbers are here because without them this
+            // used to read as a bare "logic_error" with nothing to size the request against.
+            throw ninfer::ContextCacheExhausted(
+                "logical KV descriptor table exhausted at logical-materialize: need=1 capacity=" +
+                std::to_string(capacity()) + " occupied=" + std::to_string(occupied()) +
+                " reserved_this_txn=" + std::to_string(reservation.pages()) +
+                " physical_capacity=" + std::to_string(physical_->capacity_pages()) +
+                " physical_usable=" + std::to_string(physical_->usable_pages()) +
+                " physical_allocated=" + std::to_string(physical_->allocated_pages()));
         }
         DeviceKVPageLease lease   = physical_->materialize_one(reservation, "logical-materialize");
         const std::uint32_t index = free_[--free_count_];
