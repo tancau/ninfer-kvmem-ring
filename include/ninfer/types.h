@@ -23,7 +23,16 @@ inline constexpr std::size_t kMaximumContextCacheSessionKeyBytes = 256;
 inline constexpr std::size_t kMaximumExplicitPromptCacheMarkers  = 4;
 // ContextCacheHints::allow_engine_prefix_grid proposes at most this many shared candidates, at
 // multiples of a stride that starts at one grid page and doubles until the count fits.
-inline constexpr std::uint32_t kPrefixGridCandidates = 8;
+//
+// LOCAL PROTOTYPE (KVMem-style ring): raised 8 -> 16 because the stride this budget produces has to
+// land INSIDE the band a ring anchor can actually occupy. With 8, a ~173K prompt gets a stride of
+// 32768, so the grid offers 131072 and 163840 and nothing between, while the bankable ceiling is
+// 155648 (pool minus the turn's reserve). The grid stepped straight over the only usable band and
+// reuse stopped at 131072. Halving the stride puts 147456 in it. Extra grid points cost nothing to
+// add: they carry EngineObserved evidence alone, so the resource manager materialises one only
+// after two reuse domains independently propose it, and the doubling keeps every coarser grid a
+// subset of a finer one so prompts that pick different strides still meet on shared multiples.
+inline constexpr std::uint32_t kPrefixGridCandidates = 16;
 inline constexpr std::uint32_t kPrefixGridPageTokens = 256;
 // Aggregate encoded image/video payload retained by one prompt, independent of item count.
 inline constexpr std::size_t kMaximumPromptMediaBytes    = 256ULL << 20;
