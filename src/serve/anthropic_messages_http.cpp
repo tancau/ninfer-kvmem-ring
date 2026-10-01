@@ -106,10 +106,21 @@ void HttpServer::handle_messages(const httplib::Request& req, httplib::Response&
                                       .output_tokens_explicit = request.output_tokens_explicit};
     PreparedRequest prepared;
     try {
+        // LOCAL (prefill-heartbeat): stream prompt progress on streaming requests so a long
+        // root prefill emits bytes while it runs. DSH's dsh-llm-pi-ai kills a stream after
+        // 300 s idle and the engine is silent for 10-20 min of prefill otherwise; that exact
+        // pairing is what killed every first turn. The OpenAI path gates this on a client
+        // return_progress flag that ZCode never sends, so the Anthropic path gates on stream
+        // alone. Bytes are written as SSE comments (see on_progress below), which every SSE
+        // parser ignores, so no client contract changes.
+        const ninfer::GenerationObservationOptions observation{
+            .phase_timings   = true,
+            .prompt_progress = request.stream,
+        };
         prepared = service_->prepare(request.generation,
                                      request.stream ? GenerationConsumerMode::Streaming
                                                     : GenerationConsumerMode::Aggregate,
-                                     {}, [&req] { return client_disconnected(req); });
+                                     observation, [&req] { return client_disconnected(req); });
     } catch (const ApiException& exception) {
         const ApiError error = normalize_anthropic_error(exception.error());
         record_request_rejected(make_request_rejection_log_context(
@@ -218,6 +229,17 @@ void HttpServer::handle_messages(const httplib::Request& req, httplib::Response&
                         render_and_write(transport, [&] { return encoder->content_delta(text); });
                     };
                     output.is_cancelled = [&] { return transport.poll(); };
+                    // LOCAL (prefill-heartbeat): the 5 s poll() heartbeat only fires when the
+                    // engine asks, and dense prefill units can go minutes without asking. Prompt
+                    // progress is published per prefill chunk, so hook it to an SSE comment: all
+                    // parsers ignore ':' lines, but every idle timer sees the bytes. Written
+                    // straight to the transport, bypassing the event encoder, because the
+                    // encoder's state machine throws on out-of-order use and a keep-alive must
+                    // never be able to fail the request. Disconnects propagate as
+                    // ClientDisconnected through the same catch as every other transport write.
+                    output.on_progress = [&](const ninfer::PromptProgress&) {
+                        transport.write(SseTransport::kHeartbeatComment);
+                    };
 
                     outcome = service_->run(stream->prepared, &output);
                 } catch (const ClientDisconnected&) {
