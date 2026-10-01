@@ -533,6 +533,9 @@ ProgramImpl::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                                                   state_images->continuation_hidden_store()};
 
         mark_workspace_usage(workspace_plan.mtp_round);
+        // LOCAL DIAG (decode-round-tax): same split as the ordinary path -- ~350 ms host per
+        // round with 0.5 ms device wait, all inside program_submit. Temporary.
+        const auto diag_split = Clock::now();
         execution::mtp_decode_batch(schedule_state, static_cast<std::int32_t>(lanes.size()),
                                     draft_window, envelopes, executable);
         submit_range.reset();
@@ -543,6 +546,7 @@ ProgramImpl::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             device.synchronize();
         }
         timing.end_wait();
+        const auto diag_synced = Clock::now();
 
         const double seconds = std::chrono::duration<double>(Clock::now() - started).count();
         for (std::size_t row = 0; row < lanes.size(); ++row) {
@@ -587,6 +591,27 @@ ProgramImpl::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             };
             request.lifecycle = Lifecycle::Pending;
             request.timings.decode_seconds += seconds;
+        }
+        {
+            // LOCAL DIAG (decode-round-tax): MTP path. See the ordinary path for rationale.
+            using Seconds = std::chrono::duration<double>;
+            static double acc_setup   = 0.0;
+            static double acc_submit  = 0.0;
+            static double acc_post    = 0.0;
+            static std::uint64_t acc_rounds = 0;
+            const auto now = Clock::now();
+            acc_setup += Seconds(diag_split - started).count();
+            acc_submit += Seconds(diag_synced - diag_split).count();
+            acc_post += Seconds(now - diag_synced).count();
+            if (++acc_rounds % 64 == 0) {
+                std::fprintf(stderr,
+                             "[ninfer] decode-round-tax mtp: rounds=%llu setup=%.1fs "
+                             "submit+sync=%.1fs post=%.1fs (avg ms/round: %.0f/%.0f/%.0f)\n",
+                             static_cast<unsigned long long>(acc_rounds), acc_setup, acc_submit,
+                             acc_post, 1000.0 * acc_setup / acc_rounds,
+                             1000.0 * acc_submit / acc_rounds, 1000.0 * acc_post / acc_rounds);
+                std::fflush(stderr);
+            }
         }
         return runtime::BatchedGeneratedRound{
             .tokens     = std::span<const TokenId>(mtp_host_egress->licensed_tokens.data(),
