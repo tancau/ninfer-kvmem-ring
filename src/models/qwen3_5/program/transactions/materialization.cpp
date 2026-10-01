@@ -1253,37 +1253,6 @@ void ProgramImpl::record_materialization_transfer_observations(
                                      transaction.backend_restore_destinations, *backend_kv_pages)),
                static_cast<std::uint32_t>(transaction.backend_restores.size()));
     }
-    // LOCAL FIX (restore-converged-real): the verdict that used to fire in prepare_kv_restores
-    // before any byte moved. Reaching here means context_completion_ is ready, i.e. every
-    // enqueued H2D copy has landed -- so any intent page still not device-resident is genuinely
-    // unconverged, not merely unstarted. The intent lists are the convergence set: no frontier
-    // or address handle needed. Single-threaded worker, same transaction, and the retained-tail
-    // backups enqueue after this point, so nothing legitimately re-demoted these pages in between.
-    {
-        std::uint32_t still_missing = 0;
-        for (const auto& restore : transaction.text_restores) {
-            if (text_kv_pages->valid(restore.logical) &&
-                !text_kv_pages->device_resident(restore.logical)) {
-                ++still_missing;
-            }
-        }
-        if (backend_kv_pages) {
-            for (const auto& restore : transaction.backend_restores) {
-                if (backend_kv_pages->valid(restore.logical) &&
-                    !backend_kv_pages->device_resident(restore.logical)) {
-                    ++still_missing;
-                }
-            }
-        }
-        if (still_missing != 0) {
-            std::fprintf(stderr,
-                         "[ninfer] restore did NOT converge after transfers: still_missing=%u "
-                         "planned=%zu\n",
-                         still_missing,
-                         transaction.text_restores.size() + transaction.backend_restores.size());
-            std::fflush(stderr);
-        }
-    }
 }
 
 void ProgramImpl::publish_materialization_transfers(MaterializationTransaction& transaction) {
@@ -1392,6 +1361,40 @@ void ProgramImpl::publish_materialization_transfers(MaterializationTransaction& 
     }
     for (const MaterializationTransaction::KVRestorePage& restore : transaction.backend_restores) {
         backend_kv_pages->publish_device_replica(restore.logical);
+    }
+    // LOCAL FIX (restore-converged-real): the verdict lived in prepare_kv_restores (before any
+    // byte moved -- fired on every nontrivial restore) and then at the end of
+    // record_materialization_transfer_observations (after the copies landed but before the
+    // pending->resident flip below -- fired with still_missing == planned every anchor turn).
+    // This is the first point where residency is knowable: copies landed AND publishes flipped.
+    // The intent lists are the convergence set (cleared just below). Anything still missing here
+    // is genuinely unconverged.
+    {
+        std::uint32_t still_missing = 0;
+        std::size_t planned         = 0;
+        for (const auto& restore : transaction.text_restores) {
+            ++planned;
+            if (text_kv_pages->valid(restore.logical) &&
+                !text_kv_pages->device_resident(restore.logical)) {
+                ++still_missing;
+            }
+        }
+        if (backend_kv_pages) {
+            for (const auto& restore : transaction.backend_restores) {
+                ++planned;
+                if (backend_kv_pages->valid(restore.logical) &&
+                    !backend_kv_pages->device_resident(restore.logical)) {
+                    ++still_missing;
+                }
+            }
+        }
+        if (still_missing != 0) {
+            std::fprintf(stderr,
+                         "[ninfer] restore did NOT converge after publish: still_missing=%u "
+                         "planned=%zu\n",
+                         still_missing, planned);
+            std::fflush(stderr);
+        }
     }
     transaction.text_restores.clear();
     transaction.text_restore_destinations.clear();
