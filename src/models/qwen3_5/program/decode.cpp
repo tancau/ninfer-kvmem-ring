@@ -329,7 +329,7 @@ ProgramImpl::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
             ordinary_host_ingress->state_source_slots[row]      = selectors.source;
             ordinary_host_ingress->state_destination_slots[row] = selectors.destination;
             ordinary_host_ingress->sampling[row]                = request.sampling_host;
-            ensure_sequence_kv_mapped(sequence, frontier + 1, 0);
+            ensure_sequence_kv_mapped(sequence, frontier + 1, 0, false);
         }
 
         execution::OrdinaryBatchContext schedule_state{
@@ -534,7 +534,7 @@ ProgramImpl::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             diag_ingress_s +=
                 std::chrono::duration<double>(diag_ingress_done - diag_row_start).count();
             ensure_sequence_kv_mapped(sequence, frontier + extent + 1,
-                                      std::min(capacity, frontier + extent + draft_window));
+                                      std::min(capacity, frontier + extent + draft_window), false);
             diag_ensure_s +=
                 std::chrono::duration<double>(Clock::now() - diag_ingress_done).count();
         }
@@ -765,7 +765,7 @@ ProgramImpl::decode_dflash_batch(std::span<const std::uint32_t> lanes,
             dflash_host_ingress->state_destination_slots[row] = selectors.destination;
             dflash_host_ingress->sampling[row]                = request.sampling_host;
             ensure_sequence_kv_mapped(sequence, frontier + extent + 1U,
-                                      backend_kv_cache() ? frontier : 0U);
+                                      backend_kv_cache() ? frontier : 0U, false);
         }
 
         execution::DFlashBatchContext schedule_state{

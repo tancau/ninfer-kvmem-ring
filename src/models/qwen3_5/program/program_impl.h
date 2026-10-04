@@ -1208,7 +1208,10 @@ private:
     void bind_sequence_kv(SequenceState& sequence);
     void unbind_sequence_kv(SequenceState& sequence) noexcept;
     void ensure_sequence_kv_mapped(SequenceState& sequence, std::uint32_t main_tokens,
-                                   std::uint32_t backend_tokens = 0);
+                                   std::uint32_t backend_tokens = 0,
+                                   bool restore_preferred = true);
+    // LOCAL EXP (decode-no-restore): see ensure_sequence_kv_mapped. Decode call sites pass
+    // false; everything else uses the default. Revert if recall collapses.
     // LOCAL PROTOTYPE (KVMem-style ring): demote the oldest Device-resident pages (skipping the
     // attention sink and, on the first pass, `preferred`) until at least `target_free` Device pages
     // have been released, or nothing more can be demoted. The content is always preserved on the

@@ -1814,7 +1814,8 @@ ProgramImpl::restore_kv_pages_from_host(KVAddressSpaceStore& addresses, LogicalK
 }
 
 void ProgramImpl::ensure_sequence_kv_mapped(SequenceState& sequence, std::uint32_t main_tokens,
-                                            std::uint32_t backend_tokens) {
+                                            std::uint32_t backend_tokens,
+                                            bool restore_preferred) {
     if (!sequence.kv || main_tokens > capacity || backend_tokens > capacity) {
         throw std::logic_error("KV materialization request is outside the sequence bundle");
     }
@@ -1943,11 +1944,20 @@ void ProgramImpl::ensure_sequence_kv_mapped(SequenceState& sequence, std::uint32
                                                       device.stream);
     }
     diag_e2 = Clock::now();
-    if (ring) {
+    if (ring && restore_preferred) {
         (void)restore_kv_pages_from_host(*text_kv_addresses, *text_kv_pages, sequence.kv->text,
                                         preferred);
         // The mask IS the resident set, so a page that could not be demoted or restored can only be
         // hidden; it can never expose a stale Device slot.
+        install_resident_selection(decoder ? &decoder->text_kv : nullptr, text_total,
+                                   *text_kv_addresses, *text_kv_pages, sequence.kv->text);
+        if (has_backend) {
+            install_resident_selection(backend_kv_cache(), backend_total, *backend_kv_addresses,
+                                       *backend_kv_pages, *sequence.kv->backend);
+        }
+    } else if (ring) {
+        // Decode-phase fast path (restore_preferred == false): the mask still follows residency,
+        // but evicted pages are not brought back mid-turn. See the declaration for the experiment.
         install_resident_selection(decoder ? &decoder->text_kv : nullptr, text_total,
                                    *text_kv_addresses, *text_kv_pages, sequence.kv->text);
         if (has_backend) {
