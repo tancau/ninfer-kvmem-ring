@@ -478,3 +478,12 @@ Anthropic 路已接 `on_progress` -> SSE 注释（已构建，未部署）。
 early（PARROT-5）：5/5 ✓。三标记（5/15/27）：3/3 ✓（强锚路线）。
 mid-anchor 洞区（39K-65K）未探——padding 全是 PARROT-999，无判别力，
 需 sequenced padding + 下一轮 shape 才能测。
+
+### 10.9 发版（2026-10-04，ship 9cd3993）
+
+decode-no-restore 实验：强锚 decode 7.5-9.0 -> 26.7/31.6/32.9（3.2 倍），
+召回 intact（PARROT-5 6/6，三标记 3/3 强锚路线）。prefill 不变（90.6，精确代价）。
+生产 launcher：POOL/WINDOW 172032->98304，thinking 24576->8192（备份 .bak-172k）。
+验收：存活✓ 解码✓（32.9） 召回✓ 尾巴 90.5（线 85，接受）。
+DSH streamIdleTimeoutMs=3600000 已配。Anthropic 心跳在二进制里（未实测）。
+262K 全套待测（T1 root ~70min + T2 + 探针）。
