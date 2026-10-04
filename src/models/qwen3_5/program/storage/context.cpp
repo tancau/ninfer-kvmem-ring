@@ -1839,6 +1839,12 @@ void ProgramImpl::ensure_sequence_kv_mapped(SequenceState& sequence, std::uint32
     const bool ring = window_pages != 0 && text_kv_pages != nullptr && text_kv_addresses != nullptr &&
                       text_kv_pages->physical_pool().usable_pages() <
                           text_kv_addresses->logical_page_capacity();
+    // LOCAL DIAG (ensure-tax): timestamps declared outside `if (ring)` so the accumulator
+    // at function end sees them on every path. Temporary.
+    auto diag_e0 = Clock::now();
+    auto diag_eS = diag_e0;
+    auto diag_e1 = diag_e0;
+    auto diag_e2 = diag_e0;
     std::vector<std::uint32_t> preferred;
     if (ring) {
         // Keep a few pages of slack so the pool never runs at exactly 100%: the restore path always
@@ -1882,6 +1888,9 @@ void ProgramImpl::ensure_sequence_kv_mapped(SequenceState& sequence, std::uint32
         // Retrieval preference: a quarter of the pool at most, scored on the whole mapped range.
         // Scoring runs only when the mapped page count changed (relevance shifts slowly; within one
         // page the previous selection stays valid). Between rescores the hysteresis set is reused.
+        // LOCAL DIAG (ensure-tax): per-round ensure costs ~185 ms and owns the decode tax.
+        // Split into score/spare vs ring_one (demote) vs map vs restore+install. Temporary.
+        // (diag_e0 was stamped at function top, outside `if (ring)`.)
         const std::uint32_t pool   = text_kv_pages->physical_pool().usable_pages();
         const std::uint32_t budget = std::min(proto_kv_retrieve_pages(), pool / 4U);
         const std::uint32_t mapped_now = text_kv_addresses->mapped_pages(sequence.kv->text);
@@ -1919,18 +1928,21 @@ void ProgramImpl::ensure_sequence_kv_mapped(SequenceState& sequence, std::uint32
                     proto_pages_for_tokens(prefill.capture_groups.back().frontier);
             }
         }
+        diag_eS = Clock::now();
         ring_one(*text_kv_addresses, *text_kv_pages, sequence.kv->text, text_total, preferred,
                  publishable_prefix_pages);
         if (has_backend) {
             ring_one(*backend_kv_addresses, *backend_kv_pages, *sequence.kv->backend, backend_total,
                      {}, publishable_prefix_pages);
         }
+        diag_e1 = Clock::now();
     }
     text_kv_addresses->ensure_mapped_to_tokens(sequence.kv->text, main_tokens, device.stream);
     if (backend_tokens != 0) {
         backend_kv_addresses->ensure_mapped_to_tokens(*sequence.kv->backend, backend_tokens,
                                                       device.stream);
     }
+    diag_e2 = Clock::now();
     if (ring) {
         (void)restore_kv_pages_from_host(*text_kv_addresses, *text_kv_pages, sequence.kv->text,
                                         preferred);
@@ -1942,6 +1954,29 @@ void ProgramImpl::ensure_sequence_kv_mapped(SequenceState& sequence, std::uint32
             install_resident_selection(backend_kv_cache(), backend_total, *backend_kv_addresses,
                                        *backend_kv_pages, *sequence.kv->backend);
         }
+    }
+    {
+        // LOCAL DIAG (ensure-tax): see above. Static: single worker thread.
+        using Seconds = std::chrono::duration<double>;
+        static double acc_score   = 0.0;
+        static double acc_demote  = 0.0;
+        static double acc_map     = 0.0;
+        static double acc_restore = 0.0;
+        static std::uint64_t acc_calls = 0;
+        const auto now = Clock::now();
+        acc_score += Seconds(diag_eS - diag_e0).count();
+        acc_demote += Seconds(diag_e1 - diag_eS).count();
+        acc_map += Seconds(diag_e2 - diag_e1).count();
+        acc_restore += Seconds(now - diag_e2).count();
+        if (++acc_calls % 128 == 0) {
+            std::fprintf(stderr,
+                         "[ninfer] ensure-tax: calls=%llu score=%.1fs demote=%.1fs "
+                         "map=%.1fs restore+install=%.1fs\n",
+                         static_cast<unsigned long long>(acc_calls), acc_score, acc_demote,
+                         acc_map, acc_restore);
+            std::fflush(stderr);
+        }
+        (void)acc_demote;
     }
 }
 
