@@ -472,6 +472,10 @@ ProgramImpl::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         std::optional<nvtx::ScopedRange> submit_range;
         submit_range.emplace(nvtx::Name::DecodeMtpSubmit, nvtx::Category::Mtp,
                              static_cast<std::uint64_t>(lanes.size()));
+        // LOCAL DIAG (decode-round-tax): split setup into validation / envelopes+graph /
+        // row-loop (ingress fill + ensure_mapped). The setup average grows per round
+        // (130->189 ms); this names which part grows. Temporary.
+        const auto diag_validated = Clock::now();
         DecodeGraphExecutable* executable = nullptr;
         execution::MtpCausalAttentionEnvelopes envelopes =
             mtp_causal_attention_envelopes(maximum_frontier, draft_window, capacity);
@@ -483,6 +487,7 @@ ProgramImpl::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             envelopes = mtp_causal_attention_envelopes(profile.max_execution_frontier, draft_window,
                                                        capacity);
         }
+        const auto diag_graphed = Clock::now();
 
         for (std::size_t row = 0; row < lanes.size(); ++row) {
             SequenceState& sequence           = active_sequence(lanes[row]);
@@ -596,20 +601,27 @@ ProgramImpl::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             // LOCAL DIAG (decode-round-tax): MTP path. See the ordinary path for rationale.
             using Seconds = std::chrono::duration<double>;
             static double acc_setup   = 0.0;
+            static double acc_graph   = 0.0;
+            static double acc_rows    = 0.0;
             static double acc_submit  = 0.0;
             static double acc_post    = 0.0;
             static std::uint64_t acc_rounds = 0;
             const auto now = Clock::now();
             acc_setup += Seconds(diag_split - started).count();
+            acc_graph += Seconds(diag_graphed - started).count();
+            acc_graph += Seconds(diag_graphed - started).count();
+            acc_rows += Seconds(diag_split - diag_graphed).count();
             acc_submit += Seconds(diag_synced - diag_split).count();
             acc_post += Seconds(now - diag_synced).count();
             if (++acc_rounds % 64 == 0) {
                 std::fprintf(stderr,
                              "[ninfer] decode-round-tax mtp: rounds=%llu setup=%.1fs "
+                             "(graph=%.1fs rows=%.1fs) "
                              "submit+sync=%.1fs post=%.1fs (avg ms/round: %.0f/%.0f/%.0f)\n",
-                             static_cast<unsigned long long>(acc_rounds), acc_setup, acc_submit,
-                             acc_post, 1000.0 * acc_setup / acc_rounds,
-                             1000.0 * acc_submit / acc_rounds, 1000.0 * acc_post / acc_rounds);
+                             static_cast<unsigned long long>(acc_rounds), acc_setup, acc_graph,
+                             acc_rows, acc_submit, acc_post,
+                             1000.0 * acc_setup / acc_rounds, 1000.0 * acc_submit / acc_rounds,
+                             1000.0 * acc_post / acc_rounds);
                 std::fflush(stderr);
             }
         }
