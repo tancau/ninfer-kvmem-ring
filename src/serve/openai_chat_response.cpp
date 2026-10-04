@@ -277,7 +277,12 @@ std::string OpenAIChatStream::initial_prompt_progress() {
     last_progress_tokens_     = cached_tokens_;
     last_progress_elapsed_ns_ = 0;
     Json payload              = base_payload(identity_, "chat.completion.chunk");
-    payload["choices"]        = Json::array({stream_choice(Json::object())});
+    // LOCAL (prefill-heartbeat): the delta carries one newline as reasoning_content (never
+    // accumulated into reasoning_, so finish() prefix checks are unaffected). pi-ai yields a
+    // thinking_delta for any non-empty reasoning field, which re-arms event-level idle
+    // watchdogs; an empty delta yields nothing and the 300 s timer wins. Newlines in the
+    // thinking block are invisible to answers and tool-call parsing, ~1 token each.
+    payload["choices"]        = Json::array({stream_choice(Json{{"reasoning_content", "\n"}})});
     if (include_usage_) { payload["usage"] = nullptr; }
     payload["prompt_progress"] =
         prompt_progress_json(prompt_tokens_, cached_tokens_, cached_tokens_, 0);
@@ -296,7 +301,8 @@ std::string OpenAIChatStream::prompt_progress(const ninfer::PromptProgress& prog
     last_progress_tokens_     = progress.processed_prompt_tokens;
     last_progress_elapsed_ns_ = progress.elapsed_ns;
     Json payload              = base_payload(identity_, "chat.completion.chunk");
-    payload["choices"]        = Json::array({stream_choice(Json::object())});
+    // LOCAL (prefill-heartbeat): same reasoning_content newline as initial_prompt_progress.
+    payload["choices"]        = Json::array({stream_choice(Json{{"reasoning_content", "\n"}})});
     if (include_usage_) { payload["usage"] = nullptr; }
     payload["prompt_progress"] =
         prompt_progress_json(progress.total_prompt_tokens, progress.reused_prompt_tokens,
