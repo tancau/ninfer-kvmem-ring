@@ -43,7 +43,13 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
         const ninfer::GenerationObservationOptions observation{
             .phase_timings   = true,
             .live_timings    = request.stream && request.timings_per_token,
-            .prompt_progress = request.stream && request.return_progress,
+            // LOCAL (prefill-heartbeat): progress events on every stream, not just when the
+            // client sends return_progress (DSH/ZCode never do). Each event is a standard
+            // chat.completion.chunk with an empty delta plus a prompt_progress field, so
+            // strict parsers ignore it while event-level idle watchdogs (dsh-llm-pi-ai
+            // 300 s) see traffic every prefill chunk. Without this a 173K root prefill is
+            // silent for 15+ min and every first turn dies by timeout.
+            .prompt_progress = request.stream,
         };
         prepared = service_->prepare(request.generation,
                                      request.stream ? GenerationConsumerMode::Streaming
@@ -105,7 +111,9 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
     }
 
     try {
-        const bool return_progress   = request.return_progress;
+        // return_progress gates the wire format only; the engine observation above is stream-gated.
+        // See the comment there: progress events flow on every stream by design.
+        const bool return_progress   = true;
         const bool timings_per_token = request.timings_per_token;
         auto stream                  = std::make_shared<HttpGenerationStream>(std::move(prepared));
         auto encoder = std::make_shared<OpenAIChatStream>(identity, request.include_usage,
