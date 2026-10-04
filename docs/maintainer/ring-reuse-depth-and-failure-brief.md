@@ -304,6 +304,7 @@ reuse (锚 131,072)    : sum(131072+i)   = 3.41e9  -> 340 s
 
 ## 9. 定案二（2026-09-30 白天 ~ 10-01 凌晨）
 
+
 §8 的结论全部成立。本节是**在它之后**才测出来的，主要是三件事：
 无类型 throw 这一整类、池与工作区抢同一块显存、以及一条被误判了很久的客户端超时。
 
@@ -400,3 +401,80 @@ prefill 期间引擎一个字节都不吐、流就是静的，6-12 分钟远超 
   **逐个改 800 处不是能扩展的方案。**
 - ZCode 走的 `/v1/messages`（`anthropic_messages_http.cpp`，自带工具调用渲染与解析器）
   此前**从未测过**——历史上唯一一次畸形工具调用就出自这条路。
+
+## 10. 定案三（2026-10-01 ~ 10-04，96K 固定之后）
+
+§8、§9 的结论全部成立。本节是池子固定到 96K 之后测出来的。
+
+### 10.1 经营点（不再调）
+
+```
+池 98304（1536 页，固定） chunk 1024  thinking 8192  draft 3（MTP 开）
+```
+
+`--default-thinking-budget` 24576 -> 8192（保险丝已修好才敢降）。
+MTP 关不掉：spec-none 在 vision-overlay 权重、sequence backend 分配、
+dflash feature 三处纠缠，启动即 503 卡死（活着但不恢复——supervisor 看不出死）。
+draft 3 -> 1 全慢（prefill 87.6<109，decode 18<23）：MTP 接受率 70-88%，
+每轮固定税与 draft 数无关，draft 越少轮数越多总税越高。MTP 有益，锁死。
+
+验收线（拍板数）：存活红线；召回 PARROT-early 必过；解码 ≥20；尾巴 ≥100；
+262K root 跑完（待心跳）。一条不过不发版。
+
+### 10.2 死掉的三个理论
+
+- **chunk sweep**：512/1024/4096 -> 80.6/85.7/82.7，持平。税按轮收，与 cycle 无关。
+- **驱逐-重算**：`computed_prefill_tokens` = 尾巴精确值（107762/107762），重算因子 1.00。
+  同 kernel 2.4 倍慢 + 零重算 + 零 PCIe + GPU 97% 忙——问题在 attention 本体或附带轮。
+- **spec-off**：见上，三处纠缠，判死。`-Spec none` 保留为标记。
+
+### 10.3 精确边界（mask 规则，context.cpp:1542-1546）
+
+被降级的页 bit 清零，注意力看不见。于是：
+
+```
+anchor + tail ≤ pool  ->  精确（PPL delta=0 的位置）
+anchor + tail > pool  ->  窗口近似，最老先丢，无 sink
+```
+
+172K 池/173K 会话恰好卡在边界上——之前所有"质量不降"都在边界内测的。
+96K/173K 永久溢出。spare_prefix 保早期页（PARROT-5 在 ~2.5K，5/5 答对），
+416-missing 洞在 39K-65K（mid-anchor，三标记探针只到 13K，洞区未探）。
+
+### 10.4 planner 是成本模型的（无固定偏好）
+
+同一 87 形状恒选 65K；同一 88 形状三次选了 4739、4739、65536。
+`cost_model_` 按轮算账（恢复代价 × 尾巴长度 × 池压力），见招拆招。
+弱锚轮（4739）：prefill ~112 ✓ / decode ~21 ✓ / 召回 early ✓。
+强锚轮（65K）：prefill ~88 ✗ / decode ~8 ✗ / 召回 3/3 ✓（5/15/27）。
+planner 会自己绕开锚税——验收按最坏形态。
+
+### 10.5 restore 收敛检查的三次搬家（假警报史）
+
+prepare 后查（订位≠落地，每轮误报 416/423）-> transfer 完成后查
+（pending→resident 翻转在 publish，903/903 全 miss）-> publish 翻转后、列表清空前查。
+`reserve` 设 pending，`publish_device_replica` 翻 resident，
+publish 失败直接 throw——走到检查时 missing>0 只剩真异常。归位后零误报。
+
+### 10.6 decode 350ms/轮的解剖（进行中）
+
+jsonl：decode host ~350ms/轮，device 0.5ms/轮，全在 `program_submit` 内，
+engine commit 0.1ms。decode 几乎全走 MTP 路（ordinary 凑不够 64 轮）。
+计时器：setup 130->189ms/轮（增长）/ submit 91（恒定）/ post 0。
+再切：setup 里 graph=0，rows 独吞全部。rows 内 ingress/ensure 细分已部署，待读数。
+静态排除：populate 全是计数器拷贝；restore 全异步；graph range 命中无重抓；
+find_free_extent 线性扫碎片但量级不够（µs）。
+
+### 10.7 超时与心跳（已实施，未全部署）
+
+DSH `streamIdleTimeoutMs` 可配（zod schema，不是写死——之前写错过），
+DSH 配置已设 3600000。watchdog 按 yield 事件重计时，SSE 注释不算数，
+所以 DSH 走配置 knob，ZCode 走引擎 progress 事件。
+Anthropic 路已接 `on_progress` -> SSE 注释（已构建，未部署）。
+非流请求无心跳可打，只能调客户端超时。
+
+### 10.8 召回成绩（PARROT 探针）
+
+early（PARROT-5）：5/5 ✓。三标记（5/15/27）：3/3 ✓（强锚路线）。
+mid-anchor 洞区（39K-65K）未探——padding 全是 PARROT-999，无判别力，
+需 sequenced padding + 下一轮 shape 才能测。
