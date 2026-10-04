@@ -487,3 +487,17 @@ decode-no-restore 实验：强锚 decode 7.5-9.0 -> 26.7/31.6/32.9（3.2 倍）�
 验收：存活✓ 解码✓（32.9） 召回✓ 尾巴 90.5（线 85，接受）。
 DSH streamIdleTimeoutMs=3600000 已配。Anthropic 心跳在二进制里（未实测）。
 262K 全套待测（T1 root ~70min + T2 + 探针）。
+
+### 10.10 262K 全套 verdict（2026-10-04，ship 同一二进制）
+
+```
+T1 root：  256,054 prompt，46 分钟，存活（65K 锚命中 25.6%，173K/262K 形状前 65K 字节一致）
+T2 弱锚：  prefill 83.6 / decode 21.6（线 20 过）
+探针强锚： prefill 68.9 / decode 35.6 / 召回 PARROT-5/15/27 三句一字不差
+引擎：     3.5 小时 262K 运转，零死亡零失败
+```
+
+强锚 prefill 68.9 低于 85 线：物理成本（250K 上下文 per-token attention + 190K 尾巴
+turnover），不是退化。decode（修过的部分）在 173K/262K 都是 21-37——fix scale-free；
+prefill 随规模 graceful 降级（116->84->69）。黄灯接受。
+262K 路走通。81,920 锚未落袋（门限等式待查，planner 绕行，未挡路）。
