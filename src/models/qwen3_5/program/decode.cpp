@@ -343,11 +343,6 @@ ProgramImpl::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
             state_images->continuation_hidden_store()};
 
         mark_workspace_usage(workspace_plan.ordinary_round);
-        // LOCAL DIAG (decode-round-tax): the jsonl shows ~350 ms host per decode round with
-        // 0.5 ms device wait, all inside program_submit. Split the round into setup (validation,
-        // graph select, ensure_mapped), submit+sync, and post (commit, ledger/identity/digest
-        // appends) to name the phase. Temporary: remove after the tax is attributed.
-        const auto diag_split = Clock::now();
         execution::ordinary_decode_batch(schedule_state, static_cast<std::int32_t>(lanes.size()),
                                          envelope, executable);
         submit_range.reset();
@@ -358,7 +353,6 @@ ProgramImpl::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
             device.synchronize();
         }
         timing.end_wait();
-        const auto diag_synced = Clock::now();
 
         const double seconds = std::chrono::duration<double>(Clock::now() - start).count();
         for (std::size_t row = 0; row < lanes.size(); ++row) {
@@ -382,30 +376,6 @@ ProgramImpl::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
                                                  .produced      = 1};
             request.lifecycle = Lifecycle::Pending;
             request.timings.decode_seconds += seconds;
-        }
-        {
-            // LOCAL DIAG (decode-round-tax): the jsonl shows ~350 ms host per decode round with
-            // 0.5 ms device wait, all inside program_submit. Split into setup / submit+sync /
-            // post to name the phase. Temporary: remove after the tax is attributed. Static:
-            // the engine worker loop holds execution_lock across the round, single-threaded.
-            using Seconds = std::chrono::duration<double>;
-            static double acc_setup   = 0.0;
-            static double acc_submit  = 0.0;
-            static double acc_post    = 0.0;
-            static std::uint64_t acc_rounds = 0;
-            const auto now = Clock::now();
-            acc_setup += Seconds(diag_split - start).count();
-            acc_submit += Seconds(diag_synced - diag_split).count();
-            acc_post += Seconds(now - diag_synced).count();
-            if (++acc_rounds % 64 == 0) {
-                std::fprintf(stderr,
-                             "[ninfer] decode-round-tax ordinary: rounds=%llu setup=%.1fs "
-                             "submit+sync=%.1fs post=%.1fs (avg ms/round: %.0f/%.0f/%.0f)\n",
-                             static_cast<unsigned long long>(acc_rounds), acc_setup, acc_submit,
-                             acc_post, 1000.0 * acc_setup / acc_rounds,
-                             1000.0 * acc_submit / acc_rounds, 1000.0 * acc_post / acc_rounds);
-                std::fflush(stderr);
-            }
         }
         return runtime::BatchedGeneratedRound{
             .tokens =
@@ -468,18 +438,10 @@ ProgramImpl::decode_mtp_batch(std::span<const std::uint32_t> lanes,
     }
 
     const auto started = Clock::now();
-    // LOCAL DIAG (decode-round-tax): per-row ingress vs ensure accumulators (reset per round
-    // after harvesting below). Function-static: single worker thread.
-    static double diag_ingress_s = 0.0;
-    static double diag_ensure_s  = 0.0;
     try {
         std::optional<nvtx::ScopedRange> submit_range;
         submit_range.emplace(nvtx::Name::DecodeMtpSubmit, nvtx::Category::Mtp,
                              static_cast<std::uint64_t>(lanes.size()));
-        // LOCAL DIAG (decode-round-tax): split setup into validation / envelopes+graph /
-        // row-loop (ingress fill + ensure_mapped). The setup average grows per round
-        // (130->189 ms); this names which part grows. Temporary.
-        const auto diag_validated = Clock::now();
         DecodeGraphExecutable* executable = nullptr;
         execution::MtpCausalAttentionEnvelopes envelopes =
             mtp_causal_attention_envelopes(maximum_frontier, draft_window, capacity);
@@ -491,10 +453,8 @@ ProgramImpl::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             envelopes = mtp_causal_attention_envelopes(profile.max_execution_frontier, draft_window,
                                                        capacity);
         }
-        const auto diag_graphed = Clock::now();
 
         for (std::size_t row = 0; row < lanes.size(); ++row) {
-            const auto diag_row_start         = Clock::now();
             SequenceState& sequence           = active_sequence(lanes[row]);
             const RequestControl& request     = requests[lanes[row]];
             const std::uint32_t frontier      = sequence.execution_frontier;
@@ -528,15 +488,8 @@ ProgramImpl::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             mtp_host_ingress->state_destination_slots[row] = selectors.destination;
             mtp_host_ingress->rope_deltas[row]             = sequence.rope_delta;
             mtp_host_ingress->sampling[row]                = request.sampling_host;
-            // LOCAL DIAG (decode-round-tax): split row-loop into ingress-fill vs ensure_mapped.
-            // 180 ms/round hides here or in ensure; this separates them. Temporary.
-            const auto diag_ingress_done = Clock::now();
-            diag_ingress_s +=
-                std::chrono::duration<double>(diag_ingress_done - diag_row_start).count();
             ensure_sequence_kv_mapped(sequence, frontier + extent + 1,
                                       std::min(capacity, frontier + extent + draft_window), false);
-            diag_ensure_s +=
-                std::chrono::duration<double>(Clock::now() - diag_ingress_done).count();
         }
 
         execution::MtpBatchContext schedule_state{{device, parameters, work, state_images->linear(),
@@ -550,9 +503,6 @@ ProgramImpl::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                                                   state_images->continuation_hidden_store()};
 
         mark_workspace_usage(workspace_plan.mtp_round);
-        // LOCAL DIAG (decode-round-tax): same split as the ordinary path -- ~350 ms host per
-        // round with 0.5 ms device wait, all inside program_submit. Temporary.
-        const auto diag_split = Clock::now();
         execution::mtp_decode_batch(schedule_state, static_cast<std::int32_t>(lanes.size()),
                                     draft_window, envelopes, executable);
         submit_range.reset();
@@ -563,7 +513,6 @@ ProgramImpl::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             device.synchronize();
         }
         timing.end_wait();
-        const auto diag_synced = Clock::now();
 
         const double seconds = std::chrono::duration<double>(Clock::now() - started).count();
         for (std::size_t row = 0; row < lanes.size(); ++row) {
@@ -608,37 +557,6 @@ ProgramImpl::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             };
             request.lifecycle = Lifecycle::Pending;
             request.timings.decode_seconds += seconds;
-        }
-        {
-            // LOCAL DIAG (decode-round-tax): MTP path. See the ordinary path for rationale.
-            using Seconds = std::chrono::duration<double>;
-            static double acc_setup   = 0.0;
-            static double acc_graph   = 0.0;
-            static double acc_rows    = 0.0;
-            static double acc_ingress = 0.0;
-            static double acc_ensure  = 0.0;
-            static double acc_submit  = 0.0;
-            static double acc_post    = 0.0;
-            static std::uint64_t acc_rounds = 0;
-            const auto now = Clock::now();
-            acc_setup += Seconds(diag_split - started).count();
-            acc_graph += Seconds(diag_graphed - started).count();
-            acc_rows += Seconds(diag_split - diag_graphed).count();
-            acc_ingress += diag_ingress_s;
-            acc_ensure += diag_ensure_s;
-            diag_ingress_s = 0.0;
-            diag_ensure_s  = 0.0;
-            acc_submit += Seconds(diag_synced - diag_split).count();
-            acc_post += Seconds(now - diag_synced).count();
-            if (++acc_rounds % 64 == 0) {
-                std::fprintf(stderr,
-                             "[ninfer] decode-round-tax mtp: rounds=%llu setup=%.1fs "
-                             "(graph=%.1fs rows=%.1fs [ingress=%.1fs ensure=%.1fs]) "
-                             "submit+sync=%.1fs post=%.1fs\n",
-                             static_cast<unsigned long long>(acc_rounds), acc_setup, acc_graph,
-                             acc_rows, acc_ingress, acc_ensure, acc_submit, acc_post);
-                std::fflush(stderr);
-            }
         }
         return runtime::BatchedGeneratedRound{
             .tokens     = std::span<const TokenId>(mtp_host_egress->licensed_tokens.data(),
