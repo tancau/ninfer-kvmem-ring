@@ -501,3 +501,15 @@ T2 弱锚：  prefill 83.6 / decode 21.6（线 20 过）
 turnover），不是退化。decode（修过的部分）在 173K/262K 都是 21-37——fix scale-free；
 prefill 随规模 graceful 降级（116->84->69）。黄灯接受。
 262K 路走通。81,920 锚未落袋（门限等式待查，planner 绕行，未挡路）。
+
+### 10.11 Anthropic 路全覆盖（2026-10-05，ZCode 主路径盲区补齐）
+
+```
+262K root：   prefill 85.2 / decode 27.1，零解析错误（33 工具渲染正常）
+262K 锚轮：   prefill 68.9 / decode 33.6 / cache 65,536（25.7%）
+召回三标记： 5/15/27 一字不差，end_turn 正常结束
+```
+
+Anthropic 形状命中 65K 锚——跨渲染的前缀一致性成立。
+覆盖矩阵：OpenAI 173K/262K 存活速度召回全绿，
+Anthropic 50K/262K 存活速度解析召回全绿。无盲区。
