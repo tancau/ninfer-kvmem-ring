@@ -541,3 +541,17 @@ chunk 切分、state 拷贝全翻倍——注释里已经标价了。不改（96
   T1-hole 的 50% 占空比（1.00x、host 0%）仍 open，park。
 - 注意：probe3 的"三标记 3/3"全在早期区（5/15/27≈2.5/7/13K），洞区是人类第一次探。
   之前"强锚召回 3/3"的表述收窄为"强锚早期召回 3/3"。
+
+### 10.14 Phase 2 verdict：decode 已到墙（2026-10-06，零代码）
+
+- 问：submit+sync 91ms/轮里，launch 开销多少、GPU 真干多少？
+- 判别（无代码，nvidia-smi 看 decode 期利用率）：fit 小 prompt decode，
+  GPU 99-100%，59-72 tok/s。H1 确认——91ms 就是模型本体执行，没有喂不饱。
+- 自洽模型：host 税是限轮器（throttle），不是慢动作。修前 350ms host/轮 →
+  2.9 轮/秒 → 基本全是 draft 小轮 + 极少 verify → GPU ~0%，8 tok/s。
+  修后 ~91ms/轮（90 GPU + 1 host）→ 11 轮/秒 → GPU ~99%，30 tok/s。
+  fix 没有让 GPU 变快，是把轮次放开了。
+- 结论：submit 不用动。再快只有两条路：MTP 接受率（内容相关，不可工程）
+  和换模型（没有）。Phase 2 关闭，无动作。
+- 迭代状态：Phase 1 Done（3/3），Phase 2 Done（撞墙，无动作），
+  Phase 3（worker 隔离、分层 restore）无限期 park——验收线全过，无由头开高风险项。
