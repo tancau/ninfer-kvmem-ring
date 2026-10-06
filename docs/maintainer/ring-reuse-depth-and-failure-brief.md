@@ -528,3 +528,16 @@ Anthropic 50K/262K 存活速度解析召回全绿。无盲区。
 把步长减半到 16K 能拿到 81920（尾巴 -17K，262K 轮约 -8%），代价是 offer、
 chunk 切分、state 拷贝全翻倍——注释里已经标价了。不改（96K 固定的本意就是
 停止调参；planner 会绕行弱锚，线照过）。
+
+### 10.13 Phase 1 verdict（2026-10-06）
+
+- 熔断实弹 PASS：budget 256 下 xhigh 出 280 thinking，`thinking 256/256 + control 25`，
+  stop 正常答完。nominal 路径实证；overshoot 分支（罕见触发）未实弹，代码 reviewed。
+- 洞区召回：mid-anchor（45/52/59K）在深溢出轮掉落（模型明确拒绝，非引擎异常，
+  T2/探针数全正常）；早期（PARROT-5，2.5K）在洞形状上答对（7/7）。
+  召回边界：spare 早期精确 + tail 窗口精确 + 深溢出 mid-anchor 可能掉。
+  与正主的召回免责同构；planner 绕行弱锚时不受影响。三段式 deferred。
+- MTP 内容相关说降级：decode 接受率在 sequenced 上 67.9%（理论证伪一半）；
+  T1-hole 的 50% 占空比（1.00x、host 0%）仍 open，park。
+- 注意：probe3 的"三标记 3/3"全在早期区（5/15/27≈2.5/7/13K），洞区是人类第一次探。
+  之前"强锚召回 3/3"的表述收窄为"强锚早期召回 3/3"。
