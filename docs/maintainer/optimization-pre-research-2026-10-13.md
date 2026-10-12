@@ -127,7 +127,108 @@ the binary already in production, so none of them risks the shippable state.
 | 8 | P4 note | minutes | none | none |
 | 9 | ternary weight repacking (BITCOS) | artifact + kernel work for maybe 0.6 GiB; not on the path | weeks | parked |
 
-## What changed in the plan
+## Predicted outcomes for the five flag tests
+
+Written before running any of them, so the results cannot be rationalised afterwards.
+Confidence is stated; the failure mode is stated; the decision rule is fixed.
+
+### 1. `--mtp-attention-window 4096`
+
+- **Mechanism**: caps the draft's KV read at sink-64 + N instead of the whole context.
+  Verify is untouched, so output must be bit-identical.
+- **Prediction: decode +5% to +30%, most likely +10-20%** at 135-173 K. The paper's
+  +28-44% is measured at 1 M; at a tenth of that the draft's read is a smaller share.
+- **Confidence: medium.** The mechanism is real and upstream-built, but the magnitude
+  depends on the draft's share of per-round cost, which we have not measured on this box.
+- **Failure mode (the one that matters)**: if decode is *host-bound* rather than
+  GPU-read-bound, cutting the draft's GPU read buys nothing. We have evidence the host
+  side is heavy: during one decode the engine burned ~5 cores of user CPU. Item 1 and
+  item 5 are both GPU-side and both conditional on decode being GPU-bound.
+- **Decision rule**: accept only if decode improves outside noise AND greedy output is
+  identical. Reject on divergence regardless of speed.
+
+### 2. `--device-profile auto` (we currently run `off`)
+
+- **Mechanism**: per-GPU route selection, calibrated on a device with no stored profile.
+- **Prediction: 0% to +10%, most likely near zero.** The launcher recipe disables it,
+  which usually means it was neutral or unstable on their hardware.
+- **Confidence: low-medium** that it does anything; high confidence that it is the
+  cheapest thing on the list to try.
+- **Failure mode**: a calibration pass that picks a worse route on a WDDM card (this
+  machine has already shown WDDM-specific surprises), i.e. a small regression.
+- **Decision rule**: keep `auto` only if measurably better; otherwise revert to `off`.
+  Also worth watching: whether `calibrate` finds a profile for the 3060 at all (ours is
+  not in their validated set).
+
+### 3. `--prefill-cublas` (with a larger `--prefill-chunk`)
+
+- **Mechanism**: wide prefill GEMMs go to cuBLAS instead of the hand-written tile.
+- **Prediction: prefill +20% to +50%**, with a small, real perplexity change.
+- **Confidence: medium-high on speed** (this is the ordinary cuBLAS-vs-hand-tile gap),
+  **low on the quality size** until measured.
+- **Why it matters most of the five**: the cold prefill is our worst user-visible cost —
+  200-300 s on a prefix-miss turn at 135 K, and the client kills streams past 300 s. A
+  +30% prefill is 60-90 s off the worst case.
+- **Failure mode**: it crosses our quality gate. Our project's line has been "recall
+  exact, PPL within tolerance"; cuBLAS changes accumulation order, so PPL will move and
+  the old 5.639521 figure becomes non-comparable. Recall markers should survive (they are
+  robust to tiny numeric drift), but that must be measured, not assumed.
+- **Decision rule**: accept only if PPL stays within a tolerance we declare *before*
+  measuring, and recall stays exact. Otherwise it becomes a documented trade-off, not a
+  default.
+
+### 4. `--ngram-draft-tokens 0`
+
+- **Mechanism**: removes copy-from-context drafting; its cost is a context-sized search
+  per round, which is host CPU.
+- **Prediction**: accept rate and decode *fall* on repetitive content (our synthetic
+  shape is deliberately repetitive, so the fall will be large there) and barely move on
+  real conversation traffic. CPU use should fall.
+- **Confidence: medium** on direction, low on magnitude.
+- **The real prize**: attribution. We have never explained the ~5 cores of user-mode CPU
+  during decode. If turning ngram off removes them, that is the answer, and it changes
+  what to optimise next. This is the "the LRFU lesson" again: a feature that measures
+  ~0 in value but costs host CPU every round.
+- **Failure mode**: nothing measurable either way, in which case the CPU cost is
+  elsewhere (LRFU is already off) and the search continues.
+
+### 5. `--draft-tokens` sweep and `--adaptive-mtp` on/off
+
+- **Mechanism**: draft width; adaptive chooses 3..N from measured survival.
+- **Prediction: no material gain.** The per-position acceptance decay we have measured
+  ([280,169,124] at draft 3; [162,105,56,2,2,...] deeper) says the marginal draft is
+  mostly wasted. Adaptive exists precisely to trim that.
+- **Confidence: medium-high** that this is a no-op, based on the decay shape.
+- **Failure mode**: none. This is housekeeping to close the "locked on an old binary's
+  value" question, not a search for gains.
+- **Decision rule**: keep whatever wins by >2%; otherwise leave the defaults alone.
+
+### Overall
+
+```
+best case (all five land)   decode +10-30%, prefill +20-50%, plus attribution of the
+                            decode-time CPU
+worst case                  items 1/2/5 are no-ops because decode is host-bound;
+                            item 3 is blocked by the quality gate; item 4 explains
+                            the CPU and buys nothing directly
+expected                    one real gain (prefill-cublas, gated), one likely small
+                            gain (draft window), one attribution (ngram), two no-ops
+```
+
+**No 3x anywhere.** The 3x in this project came from fixing a defect (the self-feeding
+restore loop), and this round has found no defect — it has found configuration.
+
+### One prerequisite before the sweep
+
+Because items 1 and 5 are GPU-side and the dominant measured costs today were host-side
+(and un-attributed), the first thing to establish is **whether RC3's decode at long
+context is GPU-bound or host-bound**. One cheap measurement: GPU utilisation and the
+engine's CPU time during a steady long-context decode. If the GPU sits at ~100%, the
+draft work is on the critical path and items 1/5 are worth testing. If the GPU idles and
+the CPU is busy, the sweep should start with item 4 (the CPU attribution) instead.
+
+That single measurement reorders the list, so it goes first.
+
 
 - P1 was "the biggest unexamined lever, possibly engine surgery". It is a flag. Its
   open question (envelope semantics) no longer matters for the experiment, though it
