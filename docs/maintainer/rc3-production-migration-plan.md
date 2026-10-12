@@ -3,27 +3,49 @@
 Prepared 2026-10-13. **No production file has been modified.** The current
 production launcher (`C:\Bonsai-App\Start-Bonsai-WebUI-256K.bat`) is untouched.
 
-## Current arrangement (decided 2026-10-13, in effect)
+## Current arrangement (decided 2026-10-13, in effect and verified)
 
 Decision: run RC3 on 8081 for real use, and do **not** touch production files.
 
 ```
 start   powershell -NoProfile -ExecutionPolicy Bypass -File <temp>\rc3_prod.ps1
-        (launcher exits once the engine is serving; the worker is its own process)
-stop    Stop-Process -Name ninfer-kvmem-server -Force
+        (launcher prints a full diagnostic block and exits once serving;
+         the engine is its own process and survives the launcher)
+stop    <temp>\rc3_stop.ps1        # stops worker + launchers, reports leftovers
 probe   Invoke-RestMethod http://127.0.0.1:8081/props      # full kvmem telemetry
-        Invoke-RestMethod http://127.0.0.1:8081/v1/models
-logs    <temp>\rc3-prod.log / .err         engine stdout/stderr
-        C:\Bonsai-App\logs\requests-8081.jsonl   per-request forensics (rotation 512 MiB x4)
+check   <temp>\rc3_logcheck.ps1    # proves the request log is actually growing
+logs    <temp>\rc3-prod-engine.log / .err    engine stdout/stderr
+        C:\Bonsai-App\logs\requests-8081.jsonl   per-request forensics
 rollback C:\Bonsai-App\Start-Bonsai-WebUI-256K.bat   # franken, unchanged, one command
 ```
 
-Serving configuration is the upstream default recipe with exactly two deviations:
-`--max-context 262144` (upstream default 204800) and the forensic log flags. The
-argv is copied verbatim from the package's own
-`start-ninfer.ps1 -DryRun` output rather than from its launcher, because
-`-WorkerArgs` in `-File` mode binds only its first token (two quoting forms tried,
-both fail), and the request log is worth more than the launcher convenience.
+Verified on 2026-10-13: engine pid 2024, ready 9 s, `model=bonsai2-27b ctx=262144
+backend=ninfer`, kvmem budget 36864 / reserve 16384 / sink+recent 5120 / mtp 4 /
+ngram 31 / LRFU on, request log **live** (+7479 bytes for one request; records are
+`request_start` / `request_done` / `throughput` with the same field names as franken,
+so the existing report parser should read them).
+
+Two notes:
+
+- The request-log path is the same file franken wrote to, so the 101 MB history is
+  still in it. Records are distinguishable by `server_instance_id`, but a rotation
+  boundary would be cleaner if the log is ever used for provenance.
+- Why the package launcher is not used for the request log: its `-WorkerArgs`
+  parameter binds only its first token under `-File` (two quoting forms tried, both
+  fail), so `--request-log-jsonl` cannot be passed through it. The custom launcher
+  takes its argv verbatim from the package's own `start-ninfer.ps1 -DryRun` output,
+  so the recipe does not drift; only `--max-context 262144` and the log flags differ.
+
+## Observation pitfalls hit while building this (worth not repeating)
+
+- Piping a process whose grandchild inherits our stdout (`& powershell ... | Out-Null`)
+  keeps the pipe open forever and the script blocks before its first check. This cost
+  one whole restart-cycle attempt.
+- `Select-Object -Last N` buffers the entire stream, so a script that has not finished
+  prints nothing. Combined with a detached wrapper, this made a working launcher look
+  like a dead engine.
+- The worker writes almost nothing to stdout, so a 0-byte engine log does not mean the
+  engine failed to start. Check the process and the port instead.
 
 ## Why this is small (kept from the earlier plan)
 
