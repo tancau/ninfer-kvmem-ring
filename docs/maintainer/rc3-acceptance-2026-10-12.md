@@ -141,9 +141,45 @@ is the path our own engine's publish-dedup defect lived in (repeated captures of
 same page). Turns 3 and 5 returned empty content because the probe capped output at
 200 tokens and thinking consumed them — a probe limitation, not an engine fault.
 
+## Restart cycles, orphan and VRAM release (4 cycles, 0 failures)
+
+Each cycle: verify clean slate -> start -> wait ready -> one real request -> stop ->
+verify nothing is left behind.
+
+| cycle | pre-start | ready | serving | post-stop |
+|---|---|---|---|---|
+| 1 | worker 0, launcher 0, port 0, 782 MiB | 9 s | worker 1, launcher 1, port 1, 10310 MiB | worker 0, launcher 0, port 0, 784 MiB |
+| 2 | 0/0/0, 791 MiB | 9 s | 1/1/1, 10296 MiB | 0/0/0, 779 MiB |
+| 3 | 0/0/0, 783 MiB | 9 s | 1/1/1, 10286 MiB | 0/0/0, 774 MiB |
+| 4 | 0/0/0, 782 MiB | 9 s | 1/1/1, 10285 MiB | 0/0/0, 788 MiB |
+
+No orphan worker, no orphan launcher, port released, VRAM returned to baseline every
+time. Startup is consistently 9 s. The request in each cycle returned HTTP 200; its
+text was empty because the probe capped output at 24 tokens and thinking consumed
+them (same probe-size artifact noted in the multi-turn section), so this check
+proves serving, not answer quality -- the answer path is covered by the matrix,
+the multi-turn run and the ZCode run below.
+
+## ZCode end-to-end (real client)
+
+Driven through ZCode's own headless CLI (`resources\glm\zcode.cjs -p ...`), not a
+hand-rolled client. The user's provider configuration was **not modified**: a temp
+copy with the local provider first was supplied via
+`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` + `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`.
+
+The agent loop ran against this engine: it called the read tool on `hello.txt` and
+returned the file contents verbatim (`PARROT-ZCODE-OK was written to the log at 1.`).
+Engine-side confirmation that the traffic really landed here: `history_misses`
+moved 2 -> 4 and `checkpoint_tokens` 25 -> 14968, i.e. the engine captured a
+checkpoint of ZCode's system prompt + tool schemas + file content.
+
+Note for the migration: `provider_config.json` points the `bonsai2` provider at
+`http://localhost:8081/v1` directly (not the 8080 WebUI shim the launcher comment
+mentions), so serving RC3 on 8081 needs no client change.
+
 ## Not yet done
 
-- Restart cycles, orphan-process and VRAM-release checks.
-- Real client end-to-end (ZCode through the Anthropic route).
-- Production launcher migration (current launcher points at franken on 8081).
+- Production launcher migration. Planned in `rc3-production-migration-plan.md`;
+  not applied (it is the one step that touches production files).
+
 
