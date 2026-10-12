@@ -91,10 +91,59 @@ and it is the same mechanism behind the slow rounds in our own 301-interrupt sag
    7.8 GiB, free RAM 16.2 GiB of 31.95 GiB. The 12 GiB host KV budget fits, but the
    accounting is different from ours (we pin ~8 GiB for host KV at 262K).
 
+## Thinking controls on the NInfer route (measured)
+
+| control | scope | result |
+|---|---|---|
+| `--default-thinking-budget N` (launcher `-ThinkingBudget`) | engine, at start | **respected exactly**: budget 8192 -> 8217 reasoning tokens; budget 2048 -> 2073 (the ~25 overshoot is template closing) |
+| `reasoning_effort: "none"` in the request | per request | **honoured**: reasoning 0, full answer, `finish=stop`, 62 s vs 150 s with thinking on |
+| `reasoning_effort: low / medium / xhigh` | per request | accepted but **no graded effect**: all ran to the engine budget (8217/5328/8217 across repeated runs; the 5328 is sampling noise, not monotonic) |
+| `reasoning_budget_tokens` in the request | per request | **ignored** on this route (sent 128, observed 3000/3000) — that field belongs to the llama.cpp route |
+
+So on this artifact the meaningful choice is binary: thinking on (bounded by the
+engine budget) or off (`none`). The graded levels are a template feature and our
+Bonsai template does not implement them. This matches our own engine, whose
+`translate.cpp` maps the same four levels through the same template mechanism — so
+migration is **not** a capability regression here, contrary to what the launcher's
+missing `-ReasoningEffort` switch first suggested. RC3's ninfer engine does parse
+the field (the `none` result is the proof).
+
+## Runaway-thinking fuse (the bug that cost us the most)
+
+Prompt engineered to demand far more than the budget, `max_tokens` 14000:
+
+| | our engine after the fix | RC3 |
+|---|---|---|
+| result | budget 256 -> stopped at 256/256, control emitted, answer produced | budget 8192 -> stopped at 8217, answer produced (14208 chars) |
+
+The failure mode we fixed was a comparison (`==` instead of `>=`) that made the
+counter never trip, so thinking ran forever and no answer was ever released. RC3
+stops at the budget and releases the answer, and the budget sweep above shows the
+stop point tracks the budget, not the model's whim.
+
+## Multi-turn continuation stress
+
+173K shape, cold prefill then six successive continuation turns (full history
+re-sent each turn, which is what an agent client does and what makes the prefix
+identical):
+
+| turn | elapsed | cache_n | decode tok/s |
+|---|---|---|---|
+| 0 (cold) | 309 s | 0 | 65.9 |
+| 1 | 4.2 s | 179,955 | 50.0 |
+| 2 | 3.1 s | 180,027 | 63.7 |
+| 3 | 4.7 s | 180,077 | 72.4 |
+| 4 | 3.8 s | 180,127 | 60.2 |
+| 5 | 5.3 s | 180,160 | 60.1 |
+
+All six survived; the cache grows incrementally per turn and is never rebuilt. This
+is the path our own engine's publish-dedup defect lived in (repeated captures of the
+same page). Turns 3 and 5 returned empty content because the probe capped output at
+200 tokens and thinking consumed them — a probe limitation, not an engine fault.
+
 ## Not yet done
 
-- Thinking-fuse behaviour at the actual cap (probe in flight at time of writing).
-- Multi-turn continuation stress (several successive commits on one session).
-- Restart cycles and orphan/VRAM-release checks.
+- Restart cycles, orphan-process and VRAM-release checks.
 - Real client end-to-end (ZCode through the Anthropic route).
 - Production launcher migration (current launcher points at franken on 8081).
+
