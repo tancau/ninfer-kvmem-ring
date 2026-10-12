@@ -63,6 +63,60 @@ Cost: Test 1 is free. Test 2 depends on where the draft attention lives; if it i
 not reachable without touching verification, this becomes engine surgery and drops
 to P3.
 
+### Pre-research result (2026-10-13, source reading — no GPU spent)
+
+**The claim holds in our engine too, and the mechanism for a fix already exists.**
+
+1. The draft's attention calls pass the full context as the visible extent.
+   `src/models/qwen3_5/program/speculative/mtp.cpp`:
+   ```cpp
+   const auto bridge_visible = static_cast<std::uint32_t>(position + 1);
+   const ops::CausalAttentionExecutionEnvelope bridge_envelope{bridge_visible, bridge_visible};
+   ...
+   for (int i = 1; i < mtp_proposal_extent; ++i) {
+       const auto visible = static_cast<std::uint32_t>(position + i + 1);
+       const ops::CausalAttentionExecutionEnvelope envelope{visible, visible};
+       card.mtp_forward_ar_step(..., envelope, ...);
+   }
+   ```
+   Every draft step's envelope grows with `position`, i.e. the draft attends the whole
+   prefix, exactly as the paper describes.
+
+2. Runtime corroborates it: `/props` reports `mtp_resident_pages` equal to
+   `resident_pages` (624 / 624 in one sample), so the MTP KV mirrors the full context
+   rather than a window.
+
+3. The engine already contains a **page-level attention mask** mechanism:
+   `src/ops/softmax_attention/dense/causal_cache/launch.h` carries a device bitmap over
+   64-token KV pages (`NINFER_PROTO_SELECT`, modes `all` / `even` / `first_half` /
+   `off_1_in_4`), documented in the source as throwaway scaffolding whose "real port
+   replaces this with a per-request selection produced by the retrieval policy".
+   Dropping pages from attention is therefore a solved problem in this codebase; the
+   mask just is not per-call yet.
+
+4. To be confirmed before writing any code: the exact semantics of
+   `CausalAttentionExecutionEnvelope {min_visible_keys, max_visible_keys}`. The kernel
+   filters *windows* by that range (`small_t.cu`: `if (window < min || window > max)
+   return;` then `include(min); include(max);`), and the planner uses
+   `max_visible_keys` against `prompt_visible_limit` to choose an attention route
+   (`graph_profiles.cpp`). Both uses are consistent with "the envelope states the valid
+   *length* of the visible sequence", which would **not** express a start offset — in
+   which case windowing the draft must go through the page mask rather than the
+   envelope. This is the one open question, and it is answerable by reading, not by
+   measuring.
+
+### Revised verdict
+
+Still the best remaining lever, and now a **bounded** change rather than an unknown:
+the draft reads full context (confirmed twice), the mask mechanism exists, and the open
+question is a semantics question with a definite answer in the source. The original Test
+1 (does the draft attend the full KV?) is answered; the next step is Test 1b — determine
+whether a per-call mask can be threaded into the draft's attention ops, or whether the
+envelope is the right lever after all.
+
+Kill criteria unchanged: if the per-call mask cannot be threaded without touching the
+verification path, this becomes engine surgery and drops to parked.
+
 ## P2. Risk-controlled recall contract (framing, no code)
 
 Source: *Risk-Controlled KV-Cache Eviction: From Memory Budgets to Risk Targets*,
