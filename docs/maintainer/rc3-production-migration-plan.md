@@ -1,10 +1,31 @@
 # Production launcher migration to RC3 — plan (not executed)
 
-Prepared 2026-10-13. **Nothing here has been applied.** The current production
-launcher (`C:\Bonsai-App\Start-Bonsai-WebUI-256K.bat`) is untouched. This is the
-change list, the exact command, and the rollback, ready for a decision.
+Prepared 2026-10-13. **No production file has been modified.** The current
+production launcher (`C:\Bonsai-App\Start-Bonsai-WebUI-256K.bat`) is untouched.
 
-## Why this is small
+## Current arrangement (decided 2026-10-13, in effect)
+
+Decision: run RC3 on 8081 for real use, and do **not** touch production files.
+
+```
+start   powershell -NoProfile -ExecutionPolicy Bypass -File <temp>\rc3_prod.ps1
+        (launcher exits once the engine is serving; the worker is its own process)
+stop    Stop-Process -Name ninfer-kvmem-server -Force
+probe   Invoke-RestMethod http://127.0.0.1:8081/props      # full kvmem telemetry
+        Invoke-RestMethod http://127.0.0.1:8081/v1/models
+logs    <temp>\rc3-prod.log / .err         engine stdout/stderr
+        C:\Bonsai-App\logs\requests-8081.jsonl   per-request forensics (rotation 512 MiB x4)
+rollback C:\Bonsai-App\Start-Bonsai-WebUI-256K.bat   # franken, unchanged, one command
+```
+
+Serving configuration is the upstream default recipe with exactly two deviations:
+`--max-context 262144` (upstream default 204800) and the forensic log flags. The
+argv is copied verbatim from the package's own
+`start-ninfer.ps1 -DryRun` output rather than from its launcher, because
+`-WorkerArgs` in `-File` mode binds only its first token (two quoting forms tried,
+both fail), and the request log is worth more than the launcher convenience.
+
+## Why this is small (kept from the earlier plan)
 
 RC3's worker is a **superset** of the flags our production launcher passes. Verified
 by reading `infer-kvmem-server.exe --help` from the RC3 package:
