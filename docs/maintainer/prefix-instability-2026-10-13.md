@@ -69,6 +69,31 @@ turn 1 wall time 88 s instead of 1.6 s).
 - `history_hits` stays 0 and `history_misses` climbs: the retained-session machinery
   never engages.
 
+## The control group that settles it: a second real client
+
+Same engine instance (`serve-1188-...`), same port, same 262K configuration. A different
+agent client (DSH) driving it over the Anthropic route:
+
+```
+ id  msgs  prompt   cache_hit  reuse_path            ttft
+ 1   86    154449   0          root                  236.4   (cold)
+ 2   88    155884   155443     private_endpoint        1.3
+ 3   90    160886   157010     private_endpoint        6.4
+ 4   92    164899   161006     private_endpoint        6.7
+```
+
+Its history is append-only, so the engine reuses 97-99.7% of the prefix and each
+continuation costs **1.3-6.7 s**. Against the same engine, the first client costs
+**194-218 s** on every turn with `cache_hit = 0`.
+
+That is the control group the diagnosis needed: the engine's reuse machinery, the
+retained-session inheritance and the checkpoint path all work — they simply never get a
+matching prefix from the first client. The defect is in how that client assembles the
+prompt, not in the engine, and not in the machine.
+
+Practical consequence: switching clients is an immediate ~30-150x improvement on the same
+server (`client_compare.py` reproduces the table above from the request log).
+
 ## What can be done
 
 Client side (the real fix, not ours to make): keep the conversation strictly
