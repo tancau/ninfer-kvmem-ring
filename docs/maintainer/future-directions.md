@@ -2,6 +2,10 @@
 
 Recorded 2026-09-29. Ordering: current KV work first; these are next.
 
+> Concrete test candidates (with sources, hypotheses and kill criteria) now live
+> in `post-ring-optimization-candidates.md`. This file stays the coarse
+> architectural view; that one is the actionable list.
+
 ## 1. Bigger models via weight stratification (MoE expert offload)
 
 Idea (precedent: Strata, which itself credits ninfer): keep the hottest MoE
