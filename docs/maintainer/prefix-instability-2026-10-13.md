@@ -88,9 +88,46 @@ That is what `prefill_ab.ps1` measures — prefill-chunk size and
 - `prefix_probe.py` — per-request cache_hit / reuse_path from the engine log.
 - `one_prefill.py`, `prefill_ab.ps1` — cold-prefill throughput A/B.
 
+## Mitigation measured (prefill A/B)
+
+Since reuse can never help this client, the only engine-side lever is making the forced
+full prefill faster. Cold 48,900-token prefills, two runs each, fresh nonce per run so
+the prefix cache can never contribute (`prefill_ab.ps1`, `one_prefill.py`):
+
+| arm | run 1 | run 2 | vs baseline |
+|---|---|---|---|
+| `--prefill-chunk` 256 (upstream default) | 722.5 tok/s | 720.3 | baseline |
+| `--prefill-chunk` 1024 (our franken used this) | 717.9 | 707.8 | -1% |
+| `--fast-prefill-kernel` + chunk 1024 | 811.9 | 799.0 | **+12.5%** |
+| `--fast-prefill-kernel` + chunk 2048 | 806.8 | 810.0 | +12.4% |
+
+Conclusions:
+
+- **`--fast-prefill-kernel` is worth taking: ~+12.5%**, and chunk size is irrelevant
+  (256/1024/2048 identical, matching what the ring work found for 512/1024/4096).
+- Prefill is at the hardware ceiling: GPU utilisation 100%, power 168-170 W of a 170 W
+  cap during the measurement. There is no large win to be had by tuning; the large win
+  is not having to prefill (client-side fix, ~180x).
+- Production config adopted: upstream defaults + `--fast-prefill-kernel`, LRFU off,
+  `--max-context 262144`, port 8081, request log on.
+
+## How the numbers in this file were obtained
+
+Every figure here comes from the engine's own records or from a measured run; nothing is
+illustrative. Reproduction order:
+
+1. `prefix_probe.py` — per-request `cache_hit` / `reuse_path` from the request log,
+   scoped to one `server_instance_id`.
+2. `capture_proxy.py` (8081 -> engine on 8082) — dump request bodies for two consecutive
+   turns; `body_diff.py` locates the first differing byte.
+3. `wl.py` with `UNSTABLE=1` — independent reproduction without the client.
+4. `one_prefill.py` + `prefill_ab.ps1` — cold-prefill throughput per configuration.
+
 ## The lesson, again
 
 The request log is shared by every engine that has run on this port. An unscoped read
 reported 69 simultaneous requests and queue waits of 588 s — all of it old franken test
 traffic. Every analysis in this file filters on `server_instance_id`; that filter is
 what separated "the client's prefix moves" from "the engine is slow".
+
+
