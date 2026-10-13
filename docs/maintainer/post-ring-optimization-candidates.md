@@ -305,6 +305,25 @@ items are worth filing and one is a possible future lever.
    + PPL; do not test while the GPU belongs to live use. rk2v4-e8 only if rk4v4-e8
    passes with margin.
 
+   Update 2026-10-13 (literature, no GPU): quality evidence now exists for **our exact
+   artifact** (`Ternary-Bonsai-2-27B-ninfer-v3.ninfer`) under 4-bit KV, from
+   wongkiller/ninfer-all `docs/performance/reference-2026-09.md` and KasoLu/ninfer-all:
+
+   ```
+   RTX PRO 6000 + Bonsai 27B + rk4v4    1,048,576 tokens  2/3 needles  55.3 tok/s
+   RTX 5090     + Bonsai 27B + rk4v4    1,048,576 tokens  2/3 needles  56.2 tok/s
+   RTX 5090     + Bonsai 27B + rk8v4      978,944 tokens  3/3 needles  46.9 tok/s
+   (KasoLu recipe: --max-context 958464 --kv-capacity 958464 --kv-dtype rk4v4
+    --gdn-state-fp16 --rope-yarn, "largest context a 24 GB card holds")
+   ```
+
+   Two consequences. First, the risk ordering changes: **rk8v4 goes first**, not
+   rk4v4-e8 — it keeps 8-bit keys (cosine 99.4% vs FP32), scores 3/3 where rk4v4
+   scores 2/3 on the same model, and is the smallest step away from our int8.
+   Second, upstream master (`Neroued/ninfer --kv-dtype`) has **no** rk modes at all
+   (bf16|int8|fp8|nvfp4|k8v4 only) — they are a 4090-fork feature that KVMem RC3
+   carries. So this lever exists only because we migrated; on franken it never existed.
+
 Not applicable (need training or a different engine): CompressKV, ResidualKV/DeltaKV,
 FG²-GDN, hybrid upcycling, learned eviction. Background only: massive-activation
 studies (quantisation relevance), the online-compaction empirical study (TE robustness
