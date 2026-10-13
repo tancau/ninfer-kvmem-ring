@@ -234,6 +234,46 @@ Cost: minutes.
   SideQuest), hybrid upcycling (HyLo), ActKV's adaptive budget. All need training
   or an attention-semantics change, and none of them is where our measured gap is.
 
+## Literature watch 2026-10-13 (no GPU spent)
+
+Second sweep, same verdict as the first: nothing here reopens the frontier, but two
+items are worth filing and one is a possible future lever.
+
+1. **vLLM PR #54637 — automatic prefix caching for GDN hybrids under MTP speculative
+   decoding.** Per-block SSM-state checkpointing during prefill plus dual read/write
+   anchors so decode and spec-decode reuse cached states. Two things matter for us:
+   (a) it is independent confirmation that state checkpoints are the price of prefix
+   reuse on GDN hybrids (the P3/DASC direction); (b) it names a bug class to watch
+   for — *a draft rejection crossing a state-block boundary silently reads a stale
+   checkpoint*. We cannot use the code (different engine), but if our decode ever
+   shows acceptance anomalies correlated with block boundaries, this is the first
+   place to look.
+
+2. **SGLang issue #36935 — branch reuse silently collapses when the recurrent-state
+   checkpoint is gone, even with KV 100% resident**, and only the last node's state
+   gets MRU-refreshed. Same theme from a second engine: on hybrids, KV residency is
+   necessary but not sufficient for reuse; the state checkpoint is the binding
+   constraint. Filed as supporting evidence for the P3 ordering (measure the state
+   share before optimising anything else).
+
+3. **SoK "The KV Cache Is the New Memory Wall" (arXiv 2609.30854).** Survey with design
+   rules per hardware/context/quality. Useful framing reference for the docs; confirms
+   our operating regime (KV-bound at 262 K on 12 G) is the expected one, not an
+   anomaly of our setup.
+
+4. **Possible future lever: 4-bit KV.** UltraQuant (arXiv 2606.20474) shows 4-bit KV
+   for agentic workloads with TTFT and throughput wins. Our RC3 worker lists
+   `rk4v4 / rk4v4-e8 / rk2v4-e8` among `--kv-dtype` options, which may be 4-bit-class
+   formats — unverified. If one of them is usable, halving KV bytes doubles the
+   effective retrieval budget at the same VRAM. Gated on the same recall-exact + PPL
+   bars as everything else; do not test without a quality gate, and not while the
+   GPU belongs to live use.
+
+Not applicable (need training or a different engine): CompressKV, ResidualKV/DeltaKV,
+FG²-GDN, hybrid upcycling, learned eviction. Background only: massive-activation
+studies (quantisation relevance), the online-compaction empirical study (TE robustness
+is consistent with our oldest-first experience, but offers no lever).
+
 ## What this list is not
 
 It is not a decision to migrate to RC3. That decision is behind the 262K gate
