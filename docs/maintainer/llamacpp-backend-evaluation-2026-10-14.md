@@ -97,6 +97,33 @@ Qwen3.8-27B-GSQ-RCO-IQ2_XS-mtp（8.77 GB，ISTA-DASLab）
 顺带纠正一条：新闻说 Saluki"仅保留文字 I/O"已过时——HF 仓库 6 天前加了视觉
 （`mmproj-Underdog-Saluki-27B-1.0-Q8_0.gguf` 629 MB / F16 928 MB）。
 
+### 下载后实测的 GGUF 头（2026-10-14，本地解析，未占卡）
+
+```
+valid GGUF  version=3  tensors=866  kv=53
+general.architecture              qwen35        ← 和我们三元 Bonsai 同一个架构家族
+qwen35.block_count                65            （64 主层 + 1 nextn 层）
+qwen35.context_length             262144        ← 原生 262K，与我们一致
+qwen35.attention.head_count       24
+qwen35.attention.head_count_kv    4             ← GQA 4 个 KV 头
+qwen35.embedding_length           5120
+qwen35.nextn_predict_layers       1             ← MTP 头【在】，投机解码可用
+qwen35.rope.dimension_count       64
+qwen35.rope.freq_base             10000000.0
+```
+
+**三条重要含义：**
+
+1. **架构相同（qwen35）**。也就是说 Ternary Bonsai 2 27B 和 Qwen3.8-27B 是**同一个
+   模型家族的不同量化**——不是"换一个模型"，是"同一个模型的更新版本 + 换一种量化"。
+   这让对照干净得多：KV 几何（4 个 KV 头、65 层）一致，KV 占用可直接比较，
+   变量只剩（a）底座版本、（b）量化方案（1.58-bit 三元 vs 2-bit IQ2）。
+2. **MTP 头确认存在**（`nextn_predict_layers=1`）。投机解码可用，速度可比。
+3. **原生 262144**，和我们一致——不需要 RoPE 扩窗，也就不涉及"扩窗掉质量"的问题。
+
+（本地下载的文件是 8.17 GB，HF 页面标 8.77 GB；差异未解释，但 GGUF 头完整可解析、
+tensors=866，文件本身有效。）
+
 ## 五、这条线多出来的能力（rc3 实测 --help 核实，2026-10-14）
 
 **先纠正本文早先的两条猜测**（以 rc3 预编译包实测 `--help` 为准）：
