@@ -337,6 +337,38 @@ Still open before any production switch: the PPL gate (dense-run perplexity vs t
 1.58-bit weights needs the distribution-level check. That test is queued behind GPU
 availability, not behind any technical question.
 
+## Greedy-equivalence results (measured 2026-10-13, replaces the PPL gate)
+
+The PPL gate as defined turned out to be un-runnable: franken's offline evaluator
+predates the rk formats (`--kv-dtype bf16|int8|fp8|rk8v4|nvfp4|k8v4`, no rk4v4-e8),
+RC3 ships no perplexity binary, and the serving API refuses `logprobs=true`. The
+substitute used here is stricter at the decision level: identical prompts, temperature
+0, fixed seed, both engines, outputs compared token-for-token (the "greedy-exact"
+standard from the Windowed-MTP paper). Control first: **int8 vs int8 = 7/8 identical**
+(the one difference is a single word, different/distinct), so the engine is very nearly
+deterministic and any wider divergence is attributable to the KV format.
+
+```
+format        identical/8   nature of divergences
+int8 (ctrl)   7/8           one word: different/distinct (engine noise floor)
+rk8v4         5/8           paraphrases; one factual fork ("different from modern
+                            steel" vs "a type of steel") on open-ended prose
+rk4v4-e8      3/8           paraphrases throughout open-ended prose; one content
+                            selection change (which Eiffel facts to list)
+```
+
+Precision-shaped tasks (code, exact long-context quote, exact JSON format) are
+**identical under all three formats**. Every divergence is in open-ended prose, and
+none is garbling or recall failure — but the negation case shows the shift reaches
+fact selection, not just wording.
+
+Verdict: **neither 4-bit option passes strict greedy-equivalence; stay on int8 for
+production.** The recall gate (3/3 exact, including the hole region) and the speed
+numbers for rk4v4-e8 remain true, so 4-bit stays a documented option with measured
+tradeoffs — the trigger that would reopen it is VRAM pressure (e.g. a larger retrieval
+budget that does not fit in int8), not speed. rk8v4 is the closer of the two if that
+day comes (5/8 vs 3/8, 8-bit keys intact).
+
    Update 2026-10-13 (literature, no GPU): quality evidence now exists for **our exact
    artifact** (`Ternary-Bonsai-2-27B-ninfer-v3.ninfer`) under 4-bit KV, from
    wongkiller/ninfer-all `docs/performance/reference-2026-09.md` and KasoLu/ninfer-all:
