@@ -261,13 +261,49 @@ items are worth filing and one is a possible future lever.
    our operating regime (KV-bound at 262 K on 12 G) is the expected one, not an
    anomaly of our setup.
 
-4. **Possible future lever: 4-bit KV.** UltraQuant (arXiv 2606.20474) shows 4-bit KV
-   for agentic workloads with TTFT and throughput wins. Our RC3 worker lists
-   `rk4v4 / rk4v4-e8 / rk2v4-e8` among `--kv-dtype` options, which may be 4-bit-class
-   formats — unverified. If one of them is usable, halving KV bytes doubles the
-   effective retrieval budget at the same VRAM. Gated on the same recall-exact + PPL
-   bars as everything else; do not test without a quality gate, and not while the
-   GPU belongs to live use.
+4. **Lever under verification: 4-bit KV (rk4v4-e8).** Researched 2026-10-13, no GPU spent.
+
+   The `rk*` family in our worker's `--kv-dtype` list is confirmed 4-bit KV, not an
+   exotic experimental flag (sources: KobusG/ninfer-engine `sm120a-quantized-kv-vision`
+   branch docs, UDPSendToFailed/ninfer-4090, sergiuszm/ninfer-4090, natpate/ninfer-windows
+   0.4.0 which merged all four as "live compressed-KV cache quantization"):
+
+   ```
+   rk8v4     rotated INT8 keys + packed 4-bit values
+   rk4v4     rotated packed 4-bit keys and values (Hadamard, cosine 97.8% vs FP32)
+   rk4v4-e8  E8-lattice 4-bit keys + packed 4-bit values (cosine 98.7%)
+   rk2v4-e8  2-bit E8 keys + 4-bit values (cosine 96.2%; one fork declined to ship
+             it "on evidence", others run it in production profiles)
+   ```
+
+   Measured on 4090/5090-class cards with Qwen3.8-27B (int8 baseline 35,219 B/token):
+   rk4v4-e8 costs **17,979 B/token (51%)**, decode at parity (59.68 vs 60.03 tok/s,
+   inside run variance), prefill **-20%** (pack/unpack on the write path), retrieval
+   5/5 validated, and our own worker's help claims "verified history reuse" for all
+   nine KV formats. Our help also states fast-prefill supports the rk family, so the
+   +12.5% stacks instead of conflicting.
+
+   Why it matters for this card: halving bytes/token doubles the effective retrieval
+   budget at fixed VRAM — 36864 to roughly 73 K. That directly attacks the recall
+   boundary (`anchor + tail <= pool`): the deep-overflow hole (mid-anchor 0/3) exists
+   because the pool is smaller than the history, and a 2x pool is the first thing
+   that has ever promised to close it rather than work around it.
+
+   Open questions, in order:
+   a. Do the rk kernels actually run on sm_86 (3060)? The published validations are
+      sm_89/sm_120a. Our binary lists the formats, which is necessary but not
+      sufficient — a startup + one short request answers it in minutes.
+   b. Does 4-bit KV on *ternary* weights preserve exact recall? All published cosine
+      numbers are on dense Qwen3.8; stacking 4-bit KV under 1.58-bit weights is
+      untested anywhere visible. Our NIAH gate (3 markers, exact quote) is the right
+      test, plus the PPL bar.
+   c. Only if (a) and (b) pass: re-run the hole probes at 2x budget and see whether
+      the mid-anchor region becomes quotable.
+
+   Cost if it works: one flag (`--kv-dtype rk4v4-e8`), possibly a doubled budget.
+   Cost if it fails: one restart + one short request to find out. Gated on recall-exact
+   + PPL; do not test while the GPU belongs to live use. rk2v4-e8 only if rk4v4-e8
+   passes with margin.
 
 Not applicable (need training or a different engine): CompressKV, ResidualKV/DeltaKV,
 FG²-GDN, hybrid upcycling, learned eviction. Background only: massive-activation
