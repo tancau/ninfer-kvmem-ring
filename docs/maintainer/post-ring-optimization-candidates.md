@@ -231,8 +231,9 @@ Cost: minutes.
   pool headroom. But it needs an artifact repack plus a matching kernel, and it is
   CPU/Intel-GPU oriented in the paper. Parked as a far-term VRAM idea.
 - What is deliberately not on this list: learned eviction (LKV, DBTrimKV,
-  SideQuest), hybrid upcycling (HyLo), ActKV's adaptive budget. All need training
-  or an attention-semantics change, and none of them is where our measured gap is.
+  SideQuest), hybrid upcycling (HyLo). All need training or an
+  attention-semantics change, and none of them is where our measured gap is.
+  (ActKV was on this list; it moved out on 2026-10-13 — see P6.)
 
 ## Literature watch 2026-10-13 (no GPU spent)
 
@@ -393,9 +394,130 @@ FG²-GDN, hybrid upcycling, learned eviction. Background only: massive-activatio
 studies (quantisation relevance), the online-compaction empirical study (TE robustness
 is consistent with our oldest-first experience, but offers no lever).
 
+## P6. ActKV-style action-region eviction on top of ring KV (queued 2026-10-13)
+
+Filed because a competing stack was published on the same day with the same base
+(KVMem) and a different answer at the KV layer. This is the comparison that made
+the idea concrete, so it is recorded here rather than in the literature watch.
+
+**What they run:** Strata + KVMem + ActKV, claimed on 3060Ti 8GiB + 32 GiB host,
+advertising 128K/256K/1M. "Speed kept, quality kept, capacity kept." No model named
+in the title or description; no method, no numbers beyond the title.
+
+**Strata, verified 2026-10-13** (`github.com/Niko1221/Strata`, MIT, 23.5k stars,
+2.3k forks, 1892 commits, has a paper + community benchmark tables). It runs
+Qwen3.8-Flash-Next — a huge MoE with 24,576 experts, of which about 10 fire per
+token — by splitting the model across the whole PC: hot experts on the GPU, all
+experts in RAM, the rest on the CPU, a lookup table on the SSD. Speculative
+"guess then check" (1.6-1.8x, the same idea as our MTP), prefill in 8,192-token
+chunks. Official floor is **12 GB VRAM + 32 GB RAM**; measured 53-94 tok/s write
+and 1,620-2,650 tok/s read on an RTX 5070 12 GB (Q2_0..IQ3_S).
+
+**The architecture point, which matters more than the numbers:** Strata and this
+project attack *different bottlenecks*. Strata exists because the **weights** do not
+fit — it is a weight-offload engine. This project exists because the **KV cache**
+does not fit at 262K — it is a KV-offload engine. Same "share the work across the
+whole PC" idea (Strata's own kitchen metaphor), applied to different halves of the
+memory problem. The B站 stack composes all three layers: Strata (weights) + KVMem
+(KV placement) + ActKV (KV size). That composition is why an 8 GiB card is claimed
+to hold 1M context at all, and it is also below Strata's own 12 GB floor — the KV
+layers are what buy the sub-spec operation.
+
+**Two of Strata's own README statements independently confirm our measurements**
+(useful, and worth citing because it is the largest project in this space):
+
+- "Long prompts: reads the first message in full, about 1 minute per 30,000 tokens.
+  Follow-up messages start in seconds." That is 500 tok/s cold and near-instant
+  reuse — the same shape as our 772 s -> 2.7 s (286x) continuation result, and the
+  same prefill ballpark as our 332-800 tok/s curve. Our numbers are normal for
+  consumer hardware, not slow.
+- Thinking off/low/medium/high with "Off is the fastest. High is best for hard
+  questions." Same levels we measured as unreliable in the middle; same operating
+  conclusion we reached (off for routine work).
+
+**What they do better than us, honestly:** distribution and community. MIT license,
+one-click installers, AI-assisted setup, an MCP server, multi-GPU docs, community
+benchmark tables, a paper, 23.5k stars. Our project is a single-model, single-card
+vertical by comparison. Our edge is depth on one configuration with visible
+methodology — which is exactly the axis their README operates on, and exactly the
+axis the B站 video skipped.
+
+**ActKV** (arXiv 2609.31395, submitted 2026-09-25, ~3 weeks before we saw it):
+KV cache *compression* for agentic inference. Three parts — (i) action-oriented
+eviction ranking entries by contribution to action generation (action-region
+attention scores + attention-aware LRFU), (ii) confidence-driven adaptive budget
+(sliding-window confidence monitoring), (iii) page-aware compression management,
+three primitives with custom kernels. Compression runs only at ORA boundaries
+(end of each observation-reasoning-action round). Reported: 98.53% of FullKV accuracy
+at 25.98% of peak KV memory, 3.97x token throughput, 3.58x task throughput; on
+ALFWorld 81.34% and WebShop 101.41% of FullKV accuracy at 10% and 25% budgets.
+Implementations for Transformers v5.3.0 and vLLM v0.19.0.
+
+### The actual difference
+
+```
+ActKV : lossy in-place eviction. 75-90% of KV is discarded, irreversibly.
+        Trades quality for VRAM. Real agent benchmarks (ALFWorld/WebShop).
+ring  : lossless offload + retrieval. Nothing is discarded; all KV stays in host
+        RAM at full precision, the device holds a fixed window plus IDF-retrieved
+        pages. Trades host RAM for VRAM. Evidence: recall gates + real clients.
+```
+
+So the two answer different questions. "How much of the KV is worth keeping" is
+ActKV's question; "where does the KV live" is ours. Composing them is the actual
+lever, and it has a concrete payoff on our machine: we pin ~8 GiB of host KV at
+262K, and 25% compression of that would free roughly 6 GiB of RAM.
+
+### Why this is cheap to evaluate for us, not expensive
+
+We already have the two ingredients the paper's hard part needs:
+
+- Page-granular eviction and restore — that is the ring.
+- ORA boundaries — our production load *is* the agent loop (DSH/ZCode tool
+  turns), so the cadence ActKV compresses on is the cadence we already run.
+
+And we hold a measurement that sharpens the paper into a testable prediction,
+because ActKV's ranking is "action-region attention scores **and** attention-aware
+LRFU", while we measured LRFU's contribution in our own engine as ~0 (see
+`rc3-acceptance-2026-10-12.md`, LRFU attribution arm: prefill 285.3 vs 288.9,
+decode 41.02 vs 42.92, accept 35.1% vs 36.6% — all noise).
+
+### Pre-registered predictions (written before any measurement)
+
+1. Porting only the LRFU half changes nothing measurable. Basis: our own
+   attribution arm. If it moves anything, the attribution is wrong and that is
+   worth knowing on its own.
+2. The gain, if any, comes from the action-region scoring, and it will show up as
+   *host RAM freed at equal recall*, not as speed. Basis: we drop nothing today,
+   so there is no eviction cost to recover — the only thing eviction buys here is
+   capacity.
+3. At the budget we would actually ship (well above 25%), recall will be
+   indistinguishable from today's 3/3 and the deliverable becomes a capacity
+   number. Basis: the paper's own curve, where accuracy loss only appears at 10%.
+4. The honest risk: their 1M-on-8G claim is arithmetically a 25%-budget claim, and
+   their own 10% number is 81.34% of FullKV. If we ever want to compare, the
+   comparison axis is quality at fixed budget on the same model and card, which
+   nobody has published.
+
+### Test plan
+
+- Phase 1 (no GPU): re-read the paper's eviction criterion against our page/ring
+  structures; produce the mapping or the reason it does not map. Deliverable is a
+  write-up, like P4.
+- Phase 2 (GPU, ours): implement action-region scoring only, evicting from the
+  *host* pool at ORA boundaries. Gate is our own hole-region recall 3/3 at the
+  258K shape plus the early markers; speed is measured but is not the gate.
+- Phase 3 (only if Phase 2 holds): the same on-device, to compare against the
+  paper's budget axis directly.
+
+Cost: Phase 1 hours. Phase 2 is a real kernel change — days, not minutes. That is
+the honest cost, and it is why this sits behind the write-ups rather than in front
+of them.
+
 ## What this list is not
 
 It is not a decision to migrate to RC3. That decision is behind the 262K gate
 (RC3 default recipe on the 258K shape: survival, prefill/decode, early-marker
 recall 3/3). The candidates above are independent of that outcome: P1 and P3 would
-apply on either engine, P2 and P4 are write-ups, P5 is housekeeping.
+apply on either engine, P2 and P4 are write-ups, P5 is housekeeping, and P6 is
+composed with whatever engine we end up on because it is a layer above both.
