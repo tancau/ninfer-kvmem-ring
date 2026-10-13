@@ -97,25 +97,48 @@ Qwen3.8-27B-GSQ-RCO-IQ2_XS-mtp（8.77 GB，ISTA-DASLab）
 顺带纠正一条：新闻说 Saluki"仅保留文字 I/O"已过时——HF 仓库 6 天前加了视觉
 （`mmproj-Underdog-Saluki-27B-1.0-Q8_0.gguf` 629 MB / F16 928 MB）。
 
-## 五、这条线多出来的能力（NInfer 那支给不了的）
+## 五、这条线多出来的能力（rc3 实测 --help 核实，2026-10-14）
+
+**先纠正本文早先的两条猜测**（以 rc3 预编译包实测 `--help` 为准）：
 
 ```
---kvmem-conversations N        同时保留多个会话（默认 1 = 换会话即丢）
---kvmem-conversations-gb GB    活跃+非活跃会话的内存软上限
---kvmem-session-ram-gb GB      会话内存软上限别名
---kvmem-session-nvme-gb GB     不活跃会话落盘
---kvmem-session-cache-dir DIR  落盘目录
---parallel N                   1..4 条推理车道共享权重
+✅ NVMe 在 rc3 里就有，只是名字不同
+   --kvmem-nvme-gb GB     NVMe file in GiB (0 = off)
+   --kvmem-nvme-dir PATH  NVMe directory
+   （README 里那套 --kvmem-session-nvme-gb / --kvmem-session-cache-dir 是源码版 v0.17.0 的新名）
+   语义待测：是"会话跨重启持久化"，还是仅仅是溢出文件
+
+❌ 多会话不在 rc3
+   --kvmem-conversations 在 rc3 的 --help 里【不存在】
+   -np, --parallel N      明确写着 "only 1 is currently supported"
+   → 换会话即丢、不能并行，这两条在 rc3 上拿不到
 ```
 
-前四条正是我在 NInfer 上试过、**全被拒**的"会话持久化"（见
-`prefix-persistence-2026-10-13.md`：`--slot-save-path` / `--auto-save-evicted` /
-`--disk-kv-*` 四种组合全被 KVMem 运行时拒绝）。
+**rc3 实际提供的分层与上限开关：**
 
-**但要注意**：rc3 预编译包的 release notes 明确写 "This release does not add ...
-NVMe offload"，README 也说 NVMe 快照是 source 版（v0.17.0）才有、rc3 预编译包早于该特性。
-所以 `--kvmem-conversations` 可能在 rc3 里（主机内存多会话），**NVMe 落盘要源码自编**。
-这条待加载测试时用 `--help` 核实。
+```
+--kvmem-gpu-ratio R     GPU 槽池上限 = VRAM 的这个比例（默认 0.50）
+--kvmem-cpu-gb GB       CPU 溢出竞技场（0 = 关）
+--kvmem-nvme-gb GB      NVMe 溢出文件（0 = 关）
+--kvmem-budget N        GPU 工作集 tokens（0 = n_ctx）
+--kvmem-block-tokens N  块大小（默认 128）
+--kvmem-gen-reserve N   解码余量（rc3 默认 256；IQ3 配方设 16384）
+--kvmem-sink-tokens N   常驻前缀（默认 0 = 一块）
+--kvmem-recent-tokens N 常驻最新后缀（默认 0）
+--kvmem-method          recency | retrieval（默认 retrieval）
+--kvmem-query-policy    legacy | user（配方用 user）
+--kvmem-mtp-state       snapshots | auto | replay（有 MTP 时默认 replay）
+--kvmem-harvest-v       预填充时把 V 以 raw-K 形式搬下主机
+--kvmem-raw-k-nvme      把 raw-K 和 V 存到 NVMe（需 --kvmem-nvme-gb）
+```
+
+**`--kvmem-gpu-ratio` 是个新杠杆**：默认把 GPU 槽池限制在 **VRAM 的 50%**。也就是说
+引擎是**主动自我限制**的，不是"能吃多少吃多少"。12 GiB 上默认上限是 6 GiB 槽池——
+而 53,248 的竞技场在 q8_0 下约 1.8 GiB，远没顶到上限。**所以真正的约束是权重，不是 KV。**
+
+另外注意：rc3 的 `--help` **没有列出 LRFU 相关开关**（`--kvmem-lrfu` 等），而 README 说
+LRFU 是两个后端共享的。也就是说 LRFU 可能在 NInfer 侧有、rc3 的 llama.cpp 构建里没有。
+我们本来就实测 LRFU 贡献约 0，所以影响不大。
 
 ## 六、闸门与成本
 
