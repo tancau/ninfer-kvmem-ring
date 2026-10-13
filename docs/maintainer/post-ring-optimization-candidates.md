@@ -300,10 +300,42 @@ items are worth filing and one is a possible future lever.
    c. Only if (a) and (b) pass: re-run the hole probes at 2x budget and see whether
       the mid-anchor region becomes quotable.
 
-   Cost if it works: one flag (`--kv-dtype rk4v4-e8`), possibly a doubled budget.
-   Cost if it fails: one restart + one short request to find out. Gated on recall-exact
-   + PPL; do not test while the GPU belongs to live use. rk2v4-e8 only if rk4v4-e8
-   passes with margin.
+## rk4v4-e8 verdict on sm_86 (measured 2026-10-13, same card, same artifact)
+
+(a) Starts and serves: yes. Ready in 6 s, VRAM 9418 MiB (vs ~10.3 GiB int8),
+short request correct to the byte modulo one dropped period (sampling, not recall).
+
+(b) Quality gate on the 173 K shape:
+
+```
+                       int8 (production)    rk4v4-e8
+T1 prefill             285.3 tok/s          358.1 tok/s
+T1 decode              41.02 tok/s          57.70 tok/s
+draft accept           35.1% (426/1212)     57.0% (146/256)
+early recall           3/3 exact            3/3 exact
+reuse (continuation)   99.93%               99.93% (179935 / 180052)
+```
+
+(T1 trajectories differ by sampling, so decode/accept are directional, not exact.
+Prefill is trajectory-independent. VRAM saving ~0.9 GiB is arithmetic.)
+
+(c) The hole question answers itself: mid-anchor markers (PARROT-2145/2341/2538 at
+~45/52/59 K tokens) are quotable **at the current 36 K budget, 3/3 exact in 9 s**
+— the same markers that are 0/3 on franken's 96 K oldest-first pool. The hole was a
+property of the eviction policy, not of the budget size: retrieval TopK fetches the
+asked-for blocks regardless of position, while oldest-first had already evicted them.
+No 2x-budget experiment is needed because there is no hole to close on this engine.
+
+Caveat that still stands: the first hole probe returned 0/3 for a probe-harness
+reason, not an engine reason — `max_tokens=600` was consumed entirely by thinking
+(600/600 reasoning, empty answer), the same truncation seen before. Re-ran at 2000:
+thinking 448 + answer 152 chars, `finish=stop`, 3/3. Probe harnesses on this engine
+must budget output for thinking first.
+
+Still open before any production switch: the PPL gate (dense-run perplexity vs the
+5.639521 bar). Recall-exact is necessary but not sufficient; a 4-bit KV under
+1.58-bit weights needs the distribution-level check. That test is queued behind GPU
+availability, not behind any technical question.
 
    Update 2026-10-13 (literature, no GPU): quality evidence now exists for **our exact
    artifact** (`Ternary-Bonsai-2-27B-ninfer-v3.ninfer`) under 4-bit KV, from
