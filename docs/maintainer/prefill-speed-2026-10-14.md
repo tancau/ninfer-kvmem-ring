@@ -174,9 +174,20 @@ what the model says.**
 
 Status: shipped in `start_stack.ps1` and `Start-RC3.bat` (both carry
 `--device-profile auto` explicitly, with the in-place replace in `rc3_prod.ps1` so the
-argv never depends on last-wins duplication). Rollback is one parameter. The 60K speed
-confirmation on the production shape is still open and can be taken any time the card
-is free for ~3 minutes; production soak is the de-facto verification in the meantime.
+argv never depends on last-wins duplication). Rollback is one parameter.
+
+**Production-shape confirmation (2026-10-14, clean single engine): 60K at
+746.1 tok/s vs 734.4 with device off = +1.6%.** Smaller than the +4.3% on the 50K
+shape (759.9 vs 728.7). Both positive, both single runs on different days — the honest
+statement is "+1.6% to +4.3% depending on shape, consistently positive, single-digit".
+The ship decision never rested on the size (it is upstream's own default with a clean
+numerics gate); the number quoted for the production shape is +1.6%.
+
+## No second step (2026-10-14)
+
+160K measured 329.9 tok/s on the production config, sitting on the flat line between
+173K (351.5) and 258K (332.4/310.6). **There is no second step: beyond the 96K knee the
+curve is flat.** Item closed.
 
 `--prefill-cublas` carries a documented perplexity cost and would need the
 greedy-equivalence gate; at +0.6% over `device-auto` it is not worth that gate.
