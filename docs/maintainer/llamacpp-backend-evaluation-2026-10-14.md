@@ -253,6 +253,50 @@ llama.cpp      27.8-30.0     14.1        约 2x
             我们量过的 NInfer 优化（竞技场调优、device-profile）在这条线上不通用
 ```
 
+### 质量对照（2026-10-14，与 NInfer 主线同一形状族）
+
+**召回门 ✅ 通过。** llama.cpp 后端 + IQ2_XS-mtp，258K 形状 + PARROT-5/15/25 三个标记：
+
+```
+probe-258K OK wall=6.5s prompt_n=631 prefill=179.9 decode=30.0 finish=stop
+ANSWER="Output PARROT-5 was written to the log at 5.
+Output PARROT-15 was written to the log at 15.
+Output PARROT-25 was written to the log at 25."
+```
+
+三行逐字全对。**KVMem 的检索在这条后端上同样工作。**
+
+**greedy 门（与 NInfer 主线同 8 题、温度 0、seed 20261013）：** `greedy-qwen38.json`
+vs 已存的 `greedy-int8arm.json`，逐字对比 + 人工逐组判定。注意口径：这里换的是
+底座+量化+引擎，分叉是预期的——门要回答的是"分叉的方向"（新底座答得更好还是更差），
+不是"有没有分叉"。
+
+```
+组          结果              判定
+code        不同（命名不同）  平：同一算法都对（reverse_linked_list vs reverseList）
+chinese     不同（措辞不同）  平：都对；qwen38 点名 B+ 树，略具体
+english     不同（详略不同）  平：都对；int8 多一句人眼对蓝敏感，略完整
+toolshape   不同（措辞不同）  平：都正确拒绝 + 请贴内容
+reason      不同（排版不同）  平：同一条算路（120/2.5），都对
+longctx     一字不差          平：精确引用在 IQ2 上完好
+format      不同              int8 胜：Qwen/unknownB（族对、数诚实）vs
+                              qwen38 自称 "Claude"、"180B"（身份错）
+negation    不同              int8 胜：三条实质正确的否定；
+                              qwen38 三条浅（伦敦/木石/300米），第三条边界错
+                              （塔高 330 米，"只" 300 米约成立，不是否定）
+```
+
+**计：6 平、int8 胜 2、qwen38 胜 0。** 新底座在这 8 题上**没有任何质量优势**；
+输的两组都是"知识/身份"类（自称、事实选择），不是推理类。IQ2 本身健康：
+无乱码、无召回失败，longctx 逐字一致。
+
+**综合判断（性能 + 质量）：不切换。** 解码慢 2.5 倍是硬伤，质量上新底座没有
+给出任何补偿。llama.cpp 那台已停，生产恢复 NInfer（竞技场 57344）。
+
+这条赛道的剩余价值只剩一条：**混合精度 `-ctv q4_0`**（官方已验证）可能把竞技场
+抬到 73K，让日常档回快车道。但那要先过 greedy 门（4-bit V 会动开放式输出，
+我们实测 rk4v4-e8 是 3/8）。在门通过之前，这条线封存。
+
 **三个能把它问清楚的后手：**
 
 ```
