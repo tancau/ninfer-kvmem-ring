@@ -143,6 +143,41 @@ Two corrections this table forced:
 arena effect stays attributable on its own. It remains available as a separate
 +4.3% if wanted.
 
+## Shipping `--device-profile auto` (2026-10-14)
+
+The arm matrix measured +4.3% on the 50K shape (759.9 vs 728.7). Before shipping it
+as a production default, two gates were run on the production shape
+(budget 57344, single engine):
+
+**Speed gate: INCOMPLETE.** A clean 60K run under `auto` never completed. The first
+attempt shared the card with a second engine (port conflict drove both into the
+ground: 313 tok/s and a 21 s greedy wall — discarded as contaminated). The second
+attempt was killed externally mid-prefill by the operator (confirmed). Its engine log
+showed 715–921 tok/s up to the kill, which is consistent with +4.3%, but a killed run
+is not a measurement. The +4.3% therefore still rests on the 50K arm matrix only.
+
+**Numerics gate: PASS.** `greedy-autoarm.json` (budget 57344 + auto) vs the saved
+`greedy-int8arm.json` (budget 36864, device off), same 8 prompts, temp 0, seed
+20261013:
+
+```
+code chinese english toolshape longctx format   IDENTICAL (incl. exact JSON)
+reason    "2.5 h" vs "2.5 hours"                one-word wobble
+negation  same facts #1/#2 (auto names Tour First/Montparnasse, radio use),
+          #3 differs (puddle-iron vs elevator transfer) — both factually fine
+```
+
+6/8 identical; the two diffs are open-prose selection wobble of exactly the class the
+int8-vs-int8 control showed (that control was 7/8, differing on negation by one word).
+No numeric, factual, or format decision moved. **A route-profile change does not change
+what the model says.**
+
+Status: shipped in `start_stack.ps1` and `Start-RC3.bat` (both carry
+`--device-profile auto` explicitly, with the in-place replace in `rc3_prod.ps1` so the
+argv never depends on last-wins duplication). Rollback is one parameter. The 60K speed
+confirmation on the production shape is still open and can be taken any time the card
+is free for ~3 minutes; production soak is the de-facto verification in the meantime.
+
 `--prefill-cublas` carries a documented perplexity cost and would need the
 greedy-equivalence gate; at +0.6% over `device-auto` it is not worth that gate.
 
