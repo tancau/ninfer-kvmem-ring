@@ -315,6 +315,49 @@ negation    不同              int8 胜：三条实质正确的否定；
 
 **当前状态：生产已恢复 NInfer（竞技场 57344，ngram 31）。llama.cpp 那台已停。**
 
+## 十、其它模型候选的状态（2026-10-14）
+
+### Saluki 27B：结构性出局（速度维度）
+
+远程读 HF 上的 GGUF 头（Range 请求，未下载）：
+
+```
+valid GGUF  version=3  tensors=851  kv=52
+general.architecture   qwen35
+qwen35.block_count     64              ← 对比：带 MTP 的 IQ2_XS-mtp 是 65（64+1）
+qwen35.context_length  262144
+MTP keys: NONE                         ← 无 MTP 头
+```
+
+851 vs 866 个张量，差的 15 个正是 nextn 层。**Saluki 没有 MTP 头，不能投机解码。**
+而我们的解码速度靠 MTP（NInfer 实测 2.1 倍；prism.3 官方在 5060Ti 上 MTP1 +34%，
+接受率 97%）。
+
+Saluki 的定位（agent 工具调用）与我们的生产用途重合，但用户的抱怨是**性能**，
+而它在结构上拿不到投机解码——速度维度出局。质量维度（工具调用是否真比原版好）
+没有量，但那不是当前要解决的问题。封存。
+
+（另注：新闻说它"仅保留文字 I/O"已过时，HF 6 天前加了视觉投影器 629 MB。）
+
+### Bonsai PTQ1 + prism.3：在测（同一模型，换跑道）
+
+KVMem 有个 Bonsai 2 专用构建（prism.3，RTX 20/30/40/50 已编译），吃我们盘上已有的
+`Ternary-Bonsai-2-27B-PTQ1_0.gguf`（5.54 GB）。这组对照最干净：**同一模型，
+变量只剩后端+量化**。
+
+```
+NInfer .ninfer（8.87 GB）   生产：解码 35 tok/s 散文
+llama PTQ1（5.54 GB）       未测：权重小 3.3 GB → 竞技场可开更大？
+MTP 头                      社区 r3（849 MB BF16）→ graft 为 Q4_0（+228 MiB）
+                            官方 5060Ti 实测 MTP1 +34%，接受率 97%
+```
+
+风险（官方自己写的）：长上下文召回有已知问题；30 系有编译架构但未经实机验证——
+正好由我们验证。默认上下文 128K（可调），视觉默认 CPU。
+
+下载中：运行包 742 MB + MTP 头 849 MB + 源码 38 MB（graft 脚本在源码包里）。
+下一步：SHA 校验 → graft Q4_0 头 → 加载测试（峰值显存 + 262K + 召回门）。
+
 ## 九、尚未证实 / 待办
 
 ```
