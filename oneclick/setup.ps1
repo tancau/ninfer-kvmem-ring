@@ -81,7 +81,20 @@ Line ("  匹配: {0}  ->  {1}" -f $arch, $zipName)
 
 # ---------------------------------------------------------------- 3. 磁盘检查
 Line ''
-Line '[3/4] 检查磁盘空间 ...'
+Line '[3/4] 检查磁盘和内存 ...'
+$os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+if ($os) {
+  $ramGB = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
+  Line ("  内存: {0} GB（建议 16 GB 以上）" -f $ramGB)
+  if ($ramGB -lt 15) {
+    Line ''
+    Line '  [警告] 系统内存偏小。'
+    Line '  引擎本身要预留约 13 GB（长上下文放不下显存时，会挪到内存里）。'
+    Line '  内存不足会导致卡顿甚至启动失败。建议 16 GB 以上，32 GB 更舒服。'
+    Line '  （仍要继续的话，10 秒后自动开始；按 Ctrl+C 可以取消。）'
+    Start-Sleep -Seconds 10
+  }
+}
 $drive = (Split-Path $Root -Qualifier)
 $free = (Get-PSDrive -Name $drive.TrimEnd(':') -ErrorAction SilentlyContinue).Free
 if ($free) {
