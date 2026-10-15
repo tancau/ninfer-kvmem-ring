@@ -83,14 +83,21 @@ Line ("  匹配: {0}  ->  {1}" -f $arch, $zipName)
 Line ''
 Line '[3/4] 检查磁盘和内存 ...'
 $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+$hostMib = 12288   # 主机侧 KV 预算，按内存自动调档（见下）
 if ($os) {
   $ramGB = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
   Line ("  内存: {0} GB（建议 16 GB 以上）" -f $ramGB)
+  if ($ramGB -ge 30)      { $hostMib = 12288 }
+  elseif ($ramGB -ge 22)  { $hostMib = 10240 }
+  elseif ($ramGB -ge 14)  { $hostMib = 6144 }
+  else                    { $hostMib = 4096 }
+  Line ("  主机侧记忆池: {0} MB（按你的内存自动选）" -f $hostMib)
   if ($ramGB -lt 15) {
     Line ''
     Line '  [警告] 系统内存偏小。'
-    Line '  引擎本身要预留约 13 GB（长上下文放不下显存时，会挪到内存里）。'
-    Line '  内存不足会导致卡顿甚至启动失败。建议 16 GB 以上，32 GB 更舒服。'
+    Line '  实测：引擎长上下文满载时要占约 10 GB 物理内存、提交峰值约 19 GB。'
+    Line '  16 GB 的机器能跑，但超长上下文会用到页面文件，可能变卡。'
+    Line '  已自动把记忆池调小以减轻压力。建议 32 GB。'
     Line '  （仍要继续的话，10 秒后自动开始；按 Ctrl+C 可以取消。）'
     Start-Sleep -Seconds 10
   }
@@ -169,7 +176,7 @@ $argv = @(
   '--max-context', '262144', '--max-concurrency', '1',
   '--prefill-chunk', '256', '--default-max-tokens', '16384',
   '--kvmem-budget', '57344', '--kvmem-gen-reserve', '16384',
-  '--kvmem-host-mib', '12288', '--kvmem-sink-tokens', '5120',
+  '--kvmem-host-mib', "$hostMib", '--kvmem-sink-tokens', '5120',
   '--kvmem-recent-tokens', '5120', '--kvmem-sessions', '1',
   '--kv-dtype', 'int8', '--device-profile', 'auto', '--device', '0',
   '--spec', 'mtp', '--draft-tokens', '4',
