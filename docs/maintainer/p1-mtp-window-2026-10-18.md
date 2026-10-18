@@ -4,9 +4,9 @@ Candidate P1 of `post-ring-optimization-candidates.md`. Question: can the
 production stack run `--mtp-attention-window` (the Windowed-MTP lever,
 arXiv 2607.21535)?
 
-**Answer: the mechanism exists upstream, KVMem refuses the combination by
-construction, and the value under KVMem has never been measured — the cheap
-measurements come first, not a port.**
+**Closed 2026-10-19: the mechanism exists upstream, KVMem refuses the combination
+by construction — and where the flag *is* allowed (classic mode) its measured
+value is ≈0 (T1 ≤1%, byte-identical outputs). Kill criterion met; no port.**
 
 ## 1. The flag exists and is implemented as a draft-only page rebind
 
@@ -87,21 +87,61 @@ unchanged by construction. A single interval expresses "newest N" but not
 "64-key sink + newest N" (two ranges) — upstream solved that needing a rebind
 instead. This stays a reference implementation: production runs KVMem.
 
-## 5. Test plan (needs the exclusive GPU window; ordered by cost)
+## 5. Results (2026-10-19, exclusive GPU window) — kill criterion met
 
-- **T1 — the flag's true effect, no code.** RC3 binary in **classic non-KVMem
-  mode** (the flag is allowed there), A/B `--mtp-attention-window 0` vs `4096` at
-  ~48K and ~64K context (`--kv-capacity` those sizes, `--kv-dtype int8`,
-  `--spec mtp --draft-tokens 4`, ngram off to isolate MTP). Measure s/round and
-  tok/s from the request log; confirm greedy outputs are identical. ~40 min.
-- **T2 — the draft tax under KVMem, no code.** Production recipe:
-  `--draft-tokens 4` vs `--draft-tokens 1` at the 173K anchor shape; the delta
-  bounds what windowing could recover at most. ~30 min.
-- **T3 — only if T1/T2 justify.** Upstream issue/PR on `kvmem/kvmem` (public,
-  accepts PRs) to support the window under KVMem, or a guarded self-build to
-  prove the combination works before asking. The sources are public; the build
-  chain is not part of this plan.
-- **Kill:** T1 <3% at 64K, or T2 <5% → close P1 with these numbers written down.
+**KVMem rejection, literal text** (engine exits 1 at option validation, before
+any device allocation):
+
+```
+ninfer-serve: KVMem requires ordinary/fixed/adaptive MTP1..15, ngram1..63 (automatically capped at 15 with 2..8 lanes), single-GPU or layer-pipeline BF16/INT8/FP8/NVFP4/K8V4/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8 generation, 1..8 text or resident/CPU-vision lanes, INT8/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8 fast prefill, and exclusive ownership of history caching
+```
+
+Anything but "ordinary/fixed/adaptive" MTP is refused — exactly the guard.
+
+**T1 — classic non-KVMem A/B (the flag where it is allowed).** Engine in classic
+mode, `--kv-capacity 49152 --kv-dtype int8 --spec mtp --draft-tokens 4`, ngram
+off, prompt 42,909 tokens, 1,024 greedy tokens, same seed:
+
+| arm | rounds | decode | s/round | tok/s | accepted | host µs/round |
+|---|---:|---:|---:|---:|---:|---:|
+| window 0 (default) | 513 | 23.47 s | 45.8 ms | 43.6 | 510/2050 | 84 |
+| window 4096 | 518 | 23.94 s | 46.2 ms | 42.8 | 505/2070 | 80 |
+
+Greedy outputs are **byte-identical**; acceptance nearly unchanged. Delta
++0.4 ms/round (≤1%, wrong sign) — **below the 3% kill threshold**. The draft's
+KV scan is simply not a cost in this regime, so the window has nothing to win.
+
+**T2 — draft-width A/B under the production KVMem recipe** (43K prompt, ngram
+on as in production; `--draft-tokens 4` vs `1`, adaptive live):
+
+| arm | rounds | decode | s/round | tok/s | accepted/round | drafted/round |
+|---|---:|---:|---:|---:|---:|---:|
+| draft 4 | 490 | 21.54 s | 44.0 ms | 47.5 | 1.09 | 3.06 |
+| draft 1 | 613 | 20.39 s | 33.3 ms | 50.2 | 0.67 | 1.00 |
+
+The marginal cost of ~1 → ~3 draft steps per round is 10.7 ms — **≈5.2 ms per
+extra step (including the wider verify batch), ~12% of a round**. That cost sits
+in the draft head's own forward execution, not in its KV scan (T1), so a
+scan-side window cannot remove it. On this synthetic filler prompt draft 1 even
+wins end-to-end (+5.7%) because acceptance there is poor (35.5%). It is **not**
+a production recommendation: the real traffic log (`requests-8081.jsonl`, 1,448
+requests, 0–20k prompts) shows acceptance 55.5% mean / 53.9% median and 3.14
+accepted tokens/round — production drafting pays for itself, and adaptive
+already sizes the width.
+
+**Kill:** met (T1 ≤1%). P1 is closed: the flag was unusable under KVMem by
+construction, and where usable it buys nothing. T3 (upstream PR) is abandoned.
+The one fact worth keeping: the per-draft-step cost (~5 ms) is a real,
+quantified ceiling for speculative-decoding tuning, and it lives in the MTP
+head's forward, not in its cache reads.
+
+## 6. Test plan as originally specified (all executed or abandoned)
+
+- T1 was run at 49,152 capacity (not 64K) — the effect was already <1% and
+  capacity changes nothing about the mechanism. T2 was run at the 43K prompt
+  shape (the 173K shape costs ~6 min of prefill per arm for no extra signal:
+  the marginal step cost is a per-step property, not a per-context one).
+- T3 (upstream PR): abandoned by the kill rule.
 
 ## 6. Nearby findings from the same dig (kept for the record)
 

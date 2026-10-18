@@ -27,6 +27,11 @@ weighting. RC3's own release notes agree: their LRFU is retrieval TopK ranking o
 
 ## P1. Windowed MTP draft attention (the biggest unexamined lever)
 
+Status 2026-10-19: **closed by measurement** — refused by KVMem by construction
+and ≈0 where allowed (T1 ≤1%, byte-identical outputs); the per-draft-step cost
+(~5 ms) is the draft head's forward, not its KV scan. See
+`p1-mtp-window-2026-10-18.md` §5.
+
 Source: *Windowed-MTP: Removing the Full-Context Draft-KV Tax at Million-Token
 Context*, arXiv 2607.21535.
 
@@ -127,8 +132,10 @@ unit test asserting rejection. Production therefore cannot use the flag, and the
 fork's envelope route stays a reference implementation only. The win under KVMem is
 bounded by the draft's share of KV reads (first-order estimate: low single digits
 to ~10 % of decode at long context); the two cheap decisive tests (T1 classic
-non-KVMem A/B of the flag; T2 draft-width A/B under KVMem) are specified in
-`p1-mtp-window-2026-10-18.md`.
+non-KVMem A/B of the flag; T2 draft-width A/B under KVMem) have since **run
+negative**: T1 ≤1 % with byte-identical greedy outputs (the scan is not a cost),
+and T2 bounds any scan-side win at the per-draft-step cost (~5.2 ms/round, the
+head's own forward). P1 is closed — `p1-mtp-window-2026-10-18.md` §5.
 
 ## P2. Risk-controlled recall contract (framing, no code)
 

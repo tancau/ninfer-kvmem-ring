@@ -1,8 +1,8 @@
 # Decode-host attribution — Stage 0 report (2026-10-18)
 
-Status: Stage 0 **complete** (analysis only; no GPU, no source changes).
-Stage 0b (live capture) and Stage 1 (per-phase timers) are specified below, not
-started. Companion: `decode-host-attribution-plan.md`.
+Status: Stage 0 **complete**; Stage 0b **executed** (2026-10-19, exclusive
+window) — the host line is **closed** on the evidence below; Stage 1 is parked.
+Companion: `decode-host-attribution-plan.md`.
 
 ## What was measured
 
@@ -72,36 +72,45 @@ Answer to the Stage 0 question ("can `host_work` be trusted?"): **yes for the
 executor thread, no as a process-level instrument.** The decode split is real and
 consistent, but it demonstrably does not cover the threads behind the 5-core
 observation, so it cannot close the attribution alone. This is the discrepancy
-the plan asked to write down.
+the plan asked to write down. → Stage 0b (below) then ran the live capture: the
+5-core behaviour does not reproduce on this build, and the line closes there.
 
-## Stage 0b — the live capture that closes the gap (needs an idle GPU, ~15 min)
+## Stage 0b — live capture: executed (2026-10-19, exclusive window)
 
-Run an experiment instance with the production recipe (own port and logs;
-production untouched), issue one long-context decode (173K anchor shape), and
-during it sample:
+Instance: production artifact + production recipe minus `--vision`, port 18210,
+own logs (`stage0b-*`). Two cold requests; during both, a 0.5 s sampler recorded
+nvidia-smi util/memory and the engine process CPU plus per-thread deltas
+(`gpu_cpu_sample.py`), giving three independent views.
 
-1. `nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv -lms 500`;
-2. the engine process CPU per thread — process total plus per-thread user time
-   (psutil or `Win32_PerfFormattedData_PerfProc_Thread`);
-3. the engine's own `throughput` records for the same seconds.
+| capture | prompt tok | prefill | decode | s/round | host µs/round | devwait µs/round | GPU util | engine cores |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| C1 | 42,909 | 737.5 tok/s | 1,193 tok @ 47.3 tok/s | 44.2 ms | 1,499 | 44,155 | 96.0–99.0% | 1.19–1.25 |
+| C2 | 119,392 | 336.6 tok/s | 629 tok @ 42.7 tok/s | 50.6 ms | 1,753 | 50,493 | 98.8–98.9% | 1.20–1.21 |
 
-Decision rule:
+(Util figures are per-phase means of a 0.5 s series; single 0-samples appear
+inside both prefill phases and none in decode.) Prefill is equally device-bound.
+The process has exactly one hot thread (tid 215992, ~1.2 cores) in every phase
+sampled. C2 is over the device window (B = 57,344 < 119,392): the ring is
+demoting/restoring throughout — the regime the 5-core observation came from —
+and it still shows 1.2 cores.
 
-- GPU util high (>60%) → the wall is device-bound; host levers are bounded.
-  Record it and stop the host line.
-- GPU util low (<30%) with 2–3+ cores busy in *named engine threads* → the wall
-  is host-fed; the thread names say whether it is drafting, tiering, or scoring,
-  and Stage 1 timers target that thread.
-- Either way, A/B `--kvmem-host-mib 12288` vs `4096` at the same shape: if
-  per-round device wait moves, page movement is on the critical path.
+**Verdict.** The 2026-10-13 "~5 cores of user CPU while the GPU idles" does
+**not** reproduce on this build and recipe, at 43K or at 120K. Decode is
+device-bound (99% util); process CPU (~1.2 cores) is consistent with the meters'
+host share (1.5–1.8 ms/round ≈ 3–4%). The first decision branch fires: wall is
+device-bound, host levers are bounded — **host line closed**, Stage 1 not
+justified.
 
-Cost: 15 minutes inside the next exclusive GPU window.
+Caveats, stated for honesty: single-request captures, no vision, no concurrent
+traffic. The old observation may have come from mixed prefill+decode traffic or
+from the vision path; if it reappears, re-open with the same sampler.
 
-## Stage 1 (unchanged, gated on 0b)
+## Stage 1 — parked (Stage 0b fired the "device-bound" branch)
 
 Per-phase timers `retrieve / restore / demote / draft / verify`, submit-side and
 completion-side stamps, emitted with the existing throughput records,
-observation only. Stage 2 candidates stay as in the plan. One update: the "cap
-the draft's KV read" candidate is now known to be **refused by KVMem by
-construction** (`p1-mtp-window-2026-10-18.md`), so that particular lever needs an
-upstream change, not a flag.
+observation only. Stage 2 candidates stay as in the plan. Two updates: the "cap
+the draft's KV read" candidate is **refused by KVMem by construction** and, per
+T1, worth ≈0 anyway; and the draft-step cost itself is now measured (≈5.2 ms per
+extra step, `p1-mtp-window-2026-10-18.md` §5) — a device-side number, not a host
+phase.

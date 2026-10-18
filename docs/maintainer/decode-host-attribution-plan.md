@@ -39,6 +39,12 @@ wall. It does **not** cover the threads behind the 5-core observation, so the tr
 answer is "yes for the executor thread, no as a process-level instrument". Stage 0b
 (live per-thread capture, ~15 min of idle GPU) is specified in the report.
 
+**Stage 0b status 2026-10-19: executed** — at 43K and 120K prompt shapes decode
+runs at ~99% GPU utilisation with ~1.2 process cores; the "~5 cores while the
+GPU idles" behaviour does not reproduce on this build. The first decision branch
+fired (device-bound) → **host line closed**, Stage 1 parked. See the report's
+Stage 0b section for the table and caveats.
+
 ## Stage 1 — a per-phase decode timer, observation only (ETA: 2-3 days)
 
 Goal: split one decode round into named host phases with wall times.
