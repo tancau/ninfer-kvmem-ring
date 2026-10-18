@@ -707,7 +707,8 @@ PCIe 4.0 x8 上限约 16 GB/s → 我们只用了 6%
 
 **官方门槛**（`docs/INSTALL.md`）：显存 **12 GB 起**（NVIDIA 8 GB 也能跑，只是很慢）；内存 32 GB 起，
 64 GB 才能跑全部档位；硬盘约 80 GB。它的参考机就是一张 RTX 5070 12 GB，论文标题即"用一张 12 GB 的卡跑 125B"。
-**真正的门槛是内存**（`docs/MODELS.md`）：32 GB → 只有 Coder（IQ1_M）；48 GB → Q2_0/IQ2_XS；64 GB → 全部档位。
+**真正的门槛是内存**（`docs/MODELS.md`）：**按内存推荐**档位 —— 32 GB → Coder（IQ1_M）；48 GB → Q2_0/IQ2_XS；
+64 GB → 全部档位（推荐≠只能：32 GB 也能跑全专家档，见本节末尾的 13.11 补）。
 
 **同卡实测是存在的**（它仓库里的社区报告，与我们同一张 3060 12 GB）：
 `bench/results/2026-10-09-community-rtx-3060-0141` · 引擎 v0.1.41 · **64 GB 内存** · 131K 上下文 · INT8 KV
@@ -722,11 +723,27 @@ PCIe 4.0 x8 上限约 16 GB/s → 我们只用了 6%
 报告自己标注的限制：该组用 64 GB 内存；IQ2_XS 在 260K 被内存守卫掐停；出现 GPU 过热降频；系统提交峰值 87~90%。
 HumanEval 只是 **40 题子集**，不是完整 164 题。
 
-**结论修正**：Strata 在 12 GB 上有真实可跑的配置（我们这台是 32 GB 内存 → 只有 Coder 档）。
+**结论修正**：Strata 在 12 GB 上有真实可跑的配置；我们这台 32 GB 内存按**默认装法**只有 Coder 档，
+但 32 GB 也能跑全专家档（低内存模式，见下）。
 它缺的不是"能不能跑"，而是**量化档的通识跑分**（MMLU-Pro 一类）：质量数据只有"相对完整模型"
 （Coder 达完整模型 SWE-bench Verified 的 91%）和这份 40 题代码子集。
 视频《12G 方案对比》已按此更正，并新增"同卡实测"一段：同卡上它 Q2_0 解码中位 45.3 tok/s（64 GB 内存），
 我们生产解码中位 60.7（32 GB 内存）——内存/模型/上下文都不同，只摆数字、不做结论。
+
+**13.11 补：32 GB 也能跑全专家档（2026-10-18 二次更正）**
+
+`docs/DETAILS.md`（"Low-RAM mode, resident" 一节）里，项目作者自己的机器就是 **RTX 3060 12 GB + 32 GB 内存跑
+IQ2_XS 全专家档**（Linux，v0.1.43；`20.5 GiB of experts in RAM and about 6,000 experts on the file tier`），
+解码 **43.26 → 50.40 tok/s（+16.5%，开 `STRATA_RAM_ADAPT=1`）**；同节还写
+「IQ3_XXS on a 32 GB PC stays mapped」。
+
+即 `--check` 的 "does not fit" 是**默认装法（专家常驻内存）的预估**，不是硬件墙：低内存模式
+（`--mmap-experts`、`--low-ram on|off`、`--model X --yes` 覆盖）下全专家档也能跑，代价是专家从固态硬盘读
+（官方原话 "much slower"）。Windows 旁证：RTX 4070 12 GB + 32 GB DDR4 社区报告跑 IQ2_XS 中位 48.23 tok/s
+（**改过的本地编译引擎**，非官方发行版，报告自己声明）。
+
+视频《12G 方案对比》据此二次更正：配音 6 处、图 5 张（sc-classB / sc-check / sc-docs / sc-samecard /
+sc-conclude）、简介、置顶评论、来源表 ⑥-c。
 
 ### 13.6 生产实际解码分布：35 是下限，中位数 60（2026-10-15）
 
