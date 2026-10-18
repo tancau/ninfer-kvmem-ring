@@ -32,6 +32,13 @@ trusted for the host-side decode tax, the same way the timing fields cannot.
 Kill: if Stage 0 shows `host_work` already explains the per-round cost, there is no
 missing signal to build — go straight to Stage 2 with that field as the instrument.
 
+**Stage 0 status 2026-10-18: done** — see `decode-host-stage0-2026-10-18.md`.
+The decode split (host_exposed vs device_wait) is internally consistent and adds up
+to the decode wall (median ratio 1.036), and it shows host-exposed work at 4-6 % of
+wall. It does **not** cover the threads behind the 5-core observation, so the trust
+answer is "yes for the executor thread, no as a process-level instrument". Stage 0b
+(live per-thread capture, ~15 min of idle GPU) is specified in the report.
+
 ## Stage 1 — a per-phase decode timer, observation only (ETA: 2-3 days)
 
 Goal: split one decode round into named host phases with wall times.

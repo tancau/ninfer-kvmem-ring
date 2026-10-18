@@ -117,6 +117,19 @@ envelope is the right lever after all.
 Kill criteria unchanged: if the per-call mask cannot be threaded without touching the
 verification path, this becomes engine surgery and drops to parked.
 
+### Status 2026-10-18: answered — blocked at KVMem, value unmeasured
+
+Upstream implements `--mtp-attention-window` as a draft-only page-table rebind
+(first 64 keys + newest N; verification untouched, greedy output unchanged). KVMem
+**refuses the combination by construction**: the public `ninfer-kvmem.patch`
+carries the guard `... && options.speculative.mtp_attention_window == 0` plus a
+unit test asserting rejection. Production therefore cannot use the flag, and the
+fork's envelope route stays a reference implementation only. The win under KVMem is
+bounded by the draft's share of KV reads (first-order estimate: low single digits
+to ~10 % of decode at long context); the two cheap decisive tests (T1 classic
+non-KVMem A/B of the flag; T2 draft-width A/B under KVMem) are specified in
+`p1-mtp-window-2026-10-18.md`.
+
 ## P2. Risk-controlled recall contract (framing, no code)
 
 Source: *Risk-Controlled KV-Cache Eviction: From Memory Budgets to Risk Targets*,
@@ -513,6 +526,16 @@ decode 41.02 vs 42.92, accept 35.1% vs 36.6% — all noise).
 Cost: Phase 1 hours. Phase 2 is a real kernel change — days, not minutes. That is
 the honest cost, and it is why this sits behind the write-ups rather than in front
 of them.
+
+### Phase 1 status 2026-10-18: mapped — see `kv-capacity-64gb-2026-10-18.md`
+
+Ranking half: no reachable signal (the engine's own LRFU attribution is noise).
+Budget half: KVMem's H budget is static config; adaptive would be upstream work.
+Compression half: **no counterpart at all** — KVMem moves pages at full fidelity,
+so only this part would ever free host RAM (~2.2-2.4 GiB of the 8.8 GiB a 258K
+session occupies). Reachability is the same as P1: KVMem is consumed as a released
+binary. Stays parked until host RAM is the binding limit after the 64 GB upgrade,
+or upstream adopts it.
 
 ## What this list is not
 
