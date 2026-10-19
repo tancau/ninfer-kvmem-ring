@@ -99,6 +99,21 @@ except Exception:
     MODEL = 'bonsai2-27b'
 print('model id: %s' % MODEL, flush=True)
 
+# ---- resume: continue an interrupted run from its per-item checkpoint ----
+RES_PATH = r'C:\Users\Administrator\AppData\Local\Temp\opencode\mmlupro-results.json'
+results = []
+if os.path.isfile(RES_PATH):
+    try:
+        prev = json.load(open(RES_PATH, encoding='utf-8'))
+        pr = prev.get('results') or []
+        if (prev.get('partial') and prev.get('seed') == SEED and
+                str(prev.get('model', '')) == MODEL and 0 < len(pr) < len(sample)):
+            results = pr
+            print('resuming: %d/%d items already done' % (len(results), len(sample)),
+                  flush=True)
+    except Exception as e:
+        print('resume skipped: %r' % e, flush=True)
+
 INSTR = ('Answer the following multiple choice question. Think step by step, then end your '
          'reply with a line of exactly the form "ANSWER: $LETTER" (no quotes), where LETTER '
          'is one of %s.' % 'ABCDEFGHIJ')
@@ -130,9 +145,10 @@ def parse(txt):
     return m[-1].upper() if m else None
 
 
-results = []
 t0 = time.time()
 for i, q in enumerate(sample):
+    if i < len(results):
+        continue
     gold = q['answer'].strip().upper()
     try:
         txt, tim = ask(build(q))

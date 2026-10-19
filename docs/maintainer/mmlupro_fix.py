@@ -92,6 +92,14 @@ for k, r in enumerate(todo):
         print('  item %d error: %r' % (r['i'], e), flush=True)
     r.update(got=got, correct=ok, capped=(tim.get('predicted_n') or 0) >= BUDGET,
              retried=True, timings=tim)
+    # write after every item so a killed fix pass is resumable
+    json.dump({'n': len(res), 'seed': SEED, 'model': MODEL,
+               'correct': sum(1 for x in res if x['correct']),
+               'acc': 100.0 * sum(1 for x in res if x['correct']) / len(res),
+               'partial': False,
+               'capped_left': sum(1 for x in res if x.get('capped')),
+               'budget': BUDGET, 'results': res},
+              open(RES, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
     if (k + 1) % 10 == 0:
         print('  %d/%d done (%.0fs)' % (k + 1, len(todo), time.time() - t0), flush=True)
 
