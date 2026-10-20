@@ -643,8 +643,25 @@ void ProgramImpl::start_sequence(std::uint32_t lane, SequenceState& sequence,
         // resident pages when the device pool is smaller than the context. When the pool covers the
         // context this reduces to exactly the previous single up-front mapping.
         const std::uint32_t initial_map = std::min(prompt_tokens, prefill_chunk);
+        // LOCAL FIX (dflash2 backend entitlement): the ring branch above used to ask for
+        // `initial_map` backend tokens whenever the prompt was longer than one chunk, without
+        // looking at the backend.  backend_materialized is backend-typed: MTP asks for the
+        // prompt plus the bridge extent, DFlash for the whole prompt, and DFlash2 for NOTHING
+        // (its draft K/V live in the local rings, there is no full draft pool).  Asking for
+        // backend tokens on a DFlash2 sequence therefore demanded a backend address space the
+        // planner never granted, and the mapping threw
+        //   "backend KV materialization requested without an allocation"
+        // (HTTP 500, then 503 for every later request).  Observed on --spec dflash2 with a
+        // 3,408-token prompt at --prefill-chunk 256; the same prompt with a chunk that covers
+        // it worked, which is why the boundary read as "the prompt must fit in one chunk".
+        // The backend side is now capped by what the backend actually materializes, so a
+        // DFlash2 prompt may span chunks and keep the chunk (and its workspace) small.
+        // MTP and DFlash keep their previous argument exactly (their backend_materialized is
+        // never below the chunk, so the min() is a no-op for them).
         ensure_sequence_kv_mapped(sequence, initial_map,
-                                  initial_map < prompt_tokens ? initial_map : backend_materialized);
+                                  initial_map < prompt_tokens
+                                      ? std::min(initial_map, backend_materialized)
+                                      : backend_materialized);
         install_sampling(sequence, request, request_plan.sampling);
         sequence.rope_delta = staged.prompt.rope_delta;
         set_device_i32(io.rope_delta, sequence.rope_delta);
