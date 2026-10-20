@@ -185,6 +185,15 @@ $argv = @(
   '--default-thinking-budget', '8192', '--kvmem-score-agg', 'max',
   '--fast-prefill-kernel'
 )
+# The artifact's chat template defaults reasoning_effort to 'xhigh'. On a long
+# prompt that default can spend the whole output budget on thinking before the
+# answer starts (measured 2026-10-20: 53,320-token prompt, 700/700 output
+# tokens were reasoning, no answer). This copy ships the same template with the
+# default at 'low'; a request that names an effort still wins.
+$Tpl = Join-Path $Root 'chat-template-bonsai2.jinja'
+if (Test-Path $Tpl) {
+  $argv += @('--chat-template', $Tpl)
+}
 $elog = Join-Path $Root 'engine.log'
 Remove-Item $elog, ($elog + '.err') -ErrorAction SilentlyContinue
 $proc = Start-Process -FilePath $serverExe -ArgumentList (@($ModelF) + $argv) -PassThru -WindowStyle Hidden `
