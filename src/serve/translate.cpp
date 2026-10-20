@@ -150,6 +150,15 @@ ResolvedPromptSemantics resolve_prompt_semantics(const GenerationRequest& reques
         effort = nested;
     }
     kwargs.erase("reasoning_effort");
+    // LOCAL (2026-10-20): a server-wide default effort for requests that ask for
+    // none.  Without it the chat template falls back to its own default ('xhigh'),
+    // and on a long prompt that default can spend the whole output budget on
+    // thinking before the answer starts: measured on 2026-10-20 with a 53,320-token
+    // prompt, 700 of 700 output tokens were reasoning and no answer was produced.
+    // A request that names an effort (or an explicit enable_thinking) always wins.
+    if (!effort && !thinking && server.default_reasoning_effort) {
+        effort = server.default_reasoning_effort;
+    }
     ResolvedPromptSemantics result{
         .enable_thinking           = thinking ? thinking : server.enable_thinking,
         .preserve_thinking         = preserve ? preserve : server.preserve_thinking,

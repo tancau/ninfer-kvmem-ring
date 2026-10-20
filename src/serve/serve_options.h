@@ -2,6 +2,7 @@
 
 #include "ninfer/types.h"
 #include "product/logging/logging.h"
+#include "reasoning_effort.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -74,6 +75,10 @@ struct ServeOptions {
     bool auto_prefix_grid = false;
     std::optional<bool> enable_thinking;
     std::optional<bool> preserve_thinking;
+    // Server-wide reasoning effort for requests that ask for none. The chat
+    // template has its own default (xhigh), which on a long prompt can spend the
+    // whole output budget on thinking before the answer starts.
+    std::optional<RequestedReasoningEffort> default_reasoning_effort;
     std::optional<std::uint32_t> default_thinking_budget;
     int default_max_tokens = kDefaultMaxTokens;
     bool enable_cors       = false; // send permissive CORS headers for browser UIs

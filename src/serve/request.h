@@ -1,6 +1,7 @@
 #pragma once
 
 #include "product/media_acquire/source.h"
+#include "reasoning_effort.h"
 
 #include <ninfer/types.h>
 
@@ -128,50 +129,8 @@ struct SamplingParams {
     std::optional<std::uint64_t> seed;
 };
 
-// Protocol-level effort vocabulary. Each wire adapter accepts the values from
-// its external contract; translation passes explicit values to the selected template.
-enum class RequestedReasoningEffort : std::uint8_t {
-    None,
-    Minimal,
-    Low,
-    Medium,
-    High,
-    XHigh,
-    Max,
-};
-
-[[nodiscard]] constexpr std::optional<RequestedReasoningEffort>
-parse_requested_reasoning_effort(std::string_view value) noexcept {
-    if (value == "none") { return RequestedReasoningEffort::None; }
-    if (value == "minimal") { return RequestedReasoningEffort::Minimal; }
-    if (value == "low") { return RequestedReasoningEffort::Low; }
-    if (value == "medium") { return RequestedReasoningEffort::Medium; }
-    if (value == "high") { return RequestedReasoningEffort::High; }
-    if (value == "xhigh") { return RequestedReasoningEffort::XHigh; }
-    if (value == "max") { return RequestedReasoningEffort::Max; }
-    return std::nullopt;
-}
-
-[[nodiscard]] constexpr std::string_view
-requested_reasoning_effort_name(RequestedReasoningEffort effort) noexcept {
-    switch (effort) {
-    case RequestedReasoningEffort::None:
-        return "none";
-    case RequestedReasoningEffort::Minimal:
-        return "minimal";
-    case RequestedReasoningEffort::Low:
-        return "low";
-    case RequestedReasoningEffort::Medium:
-        return "medium";
-    case RequestedReasoningEffort::High:
-        return "high";
-    case RequestedReasoningEffort::XHigh:
-        return "xhigh";
-    case RequestedReasoningEffort::Max:
-        return "max";
-    }
-    return {};
-}
+// Protocol-level effort vocabulary and its parser live in reasoning_effort.h so
+// the serving options can name the same type.
 
 struct GenerationRequest {
     std::vector<ChatTurn> messages;

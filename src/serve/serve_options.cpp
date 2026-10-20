@@ -83,6 +83,7 @@ std::string serve_usage_text(const char* argv0) {
            "[--kv-dtype bf16|int8|fp8|rk8v4|nvfp4|k8v4] "
            "[--spec mtp|dflash|dflash2 --draft-tokens N] "
            "[--default-max-tokens N] [--default-thinking-budget N] "
+           "[--default-reasoning-effort none|minimal|low|medium|high|xhigh|max] "
            "[--vision] [--vision-residency resident|overlay] [--vision-max-merged N] "
            "[--no-cuda-graph] [--no-prefix-reuse] [--auto-prefix-grid] [--devices N,M] "
            "[--chat-template FILE] "
@@ -132,6 +133,10 @@ std::string serve_usage_text(const char* argv0) {
            "--host-kv-mib uses MiB\n"
            "       --default-thinking-budget caps model-origin thinking for enabled requests; "
            "control tokens count toward the request output limit\n"
+           "       --default-reasoning-effort sets the reasoning effort for requests that ask "
+           "for none (none, minimal, low, medium, high, xhigh, max); a request that names an "
+           "effort always wins, and the chat template's own default (xhigh) applies when this "
+           "flag is absent\n"
            "       --preserve-thinking retains closed-turn assistant reasoning in later prompts\n"
            "       sampler defaults come from the loaded model and resolved thinking mode; "
            "server flags and request fields override individual values.\n"
@@ -338,6 +343,15 @@ ServeOptions parse_serve_options(int argc, char** argv) {
                 throw std::invalid_argument("--default-thinking-budget is out of range");
             }
             options.default_thinking_budget = static_cast<std::uint32_t>(budget);
+        } else if (arg == "--default-reasoning-effort") {
+            const std::string_view value = require_value("--default-reasoning-effort");
+            const auto effort = parse_requested_reasoning_effort(value);
+            if (!effort) {
+                throw std::invalid_argument(
+                    "--default-reasoning-effort must be one of none, minimal, low, medium, "
+                    "high, xhigh, or max");
+            }
+            options.default_reasoning_effort = *effort;
         } else if (arg == "--vision") {
             options.enable_vision = true;
         } else if (arg == "--vision-residency") {
